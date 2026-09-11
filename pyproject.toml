@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bezalel-agent-orchestrator"
+version = "0.1.0"
+description = "LangGraph orchestration service for the Bezalel development agent team."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.115,<1",
+  "langgraph==0.4.1",
+  "langgraph-checkpoint-sqlite==2.0.11",
+  "aiosqlite>=0.20,<0.22",
+  "langsmith>=0.3.45,<1",
+  "pydantic==2.11.3",
+  "python-dotenv>=1.0,<2",
+  "uvicorn[standard]>=0.34,<1",
+]
+
+[project.optional-dependencies]
+dev = [
+  "httpx>=0.27,<1",
+  "pytest>=8,<10",
+  "pytest-asyncio>=0.24,<1",
+]
+
+[project.scripts]
+bezalel-orchestrator = "orchestrator.main:cli"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"

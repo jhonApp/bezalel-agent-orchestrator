@@ -1,0 +1,11 @@
+fastapi<1,>=0.115
+langgraph==0.4.1
+langsmith<1,>=0.3.45
+pydantic==2.11.3
+python-dotenv<2,>=1.0
+uvicorn[standard]<1,>=0.34
+
+[dev]
+httpx<1,>=0.27
+pytest<10,>=8
+pytest-asyncio<1,>=0.24

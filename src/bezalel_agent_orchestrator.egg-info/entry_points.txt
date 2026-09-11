@@ -1,0 +1,2 @@
+[console_scripts]
+bezalel-orchestrator = orchestrator.main:cli

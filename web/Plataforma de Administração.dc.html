@@ -1,0 +1,861 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+
+<helmet>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <script src="./image-slot.js"></script>
+  <style>
+    body { margin: 0; background: #EDEAE1; font-family: 'JetBrains Mono', ui-monospace, monospace; }
+    a { color: #1E7F73; }
+    .metric-tooltip { position: relative; cursor: help; }
+    .metric-tooltip::after {
+      content: attr(data-tooltip); position: absolute; z-index: 60; left: 0; bottom: calc(100% + 10px);
+      width: 220px; padding: 10px 12px; background: #14140F; color: #F6F4EC;
+      border: 1.5px solid #14140F; box-shadow: 4px 4px 0 #1E7F73;
+      font-size: 10px; font-weight: 500; line-height: 1.5; letter-spacing: 0; text-transform: none;
+      opacity: 0; pointer-events: none; transform: translateY(4px); transition: opacity .14s ease, transform .14s ease;
+    }
+    .metric-tooltip::before {
+      content: ''; position: absolute; z-index: 61; left: 14px; bottom: calc(100% + 4px);
+      width: 8px; height: 8px; background: #14140F; transform: rotate(45deg);
+      opacity: 0; pointer-events: none; transition: opacity .14s ease;
+    }
+    .metric-tooltip:hover::after, .metric-tooltip:focus-visible::after { opacity: 1; transform: translateY(0); }
+    .metric-tooltip:hover::before, .metric-tooltip:focus-visible::before { opacity: 1; }
+    a:hover { color: #35C7B9; }
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-thumb { background: rgba(20,20,15,0.25); }
+  </style>
+</helmet>
+
+<div style="display:flex; height:100vh; background:#EDEAE1; color:#14140F; overflow:hidden;">
+
+  <!-- SIDEBAR -->
+  <aside style="width:238px; flex-shrink:0; display:flex; flex-direction:column; background:#14140F; padding:20px 0; box-sizing:border-box;">
+    <div style="padding:0 18px; margin-bottom:26px; display:flex; align-items:center; gap:9px;">
+      <div style="width:26px; height:26px; border:2px solid #35C7B9; display:flex; align-items:center; justify-content:center; color:#35C7B9; font-weight:800; font-size:13px; flex-shrink:0;">[ ]</div>
+      <div>
+        <div style="font-size:12.5px; font-weight:800; color:#fff; letter-spacing:0.04em; text-transform:uppercase; line-height:1.2;">Bezalel</div>
+        <div style="font-size:9.5px; color:rgba(255,255,255,0.4); letter-spacing:0.08em; text-transform:uppercase;">Orchestrator</div>
+      </div>
+    </div>
+
+    <nav style="flex:1; padding:0 12px; display:flex; flex-direction:column; gap:3px; overflow-y:auto;">
+      <sc-for list="{{ navItems }}" as="nav" hint-placeholder-count="8">
+        <button onClick="{{ nav.onClick }}" style="{{ nav.style }}">{{ nav.label }}</button>
+      </sc-for>
+    </nav>
+
+    <div style="padding:14px 18px 0; border-top:1px solid rgba(255,255,255,0.12); margin-top:8px;">
+      <div style="font-size:9.5px; color:rgba(255,255,255,0.3); letter-spacing:0.04em; line-height:1.6; text-transform:uppercase;">
+        LangGraph + Codex CLI<br/>Local · SQLite
+      </div>
+    </div>
+  </aside>
+
+  <!-- MAIN -->
+  <main style="flex:1; overflow-y:auto; padding:30px 40px 60px; background-image:linear-gradient(rgba(20,20,15,0.05) 1px, transparent 1px), linear-gradient(90deg, rgba(20,20,15,0.05) 1px, transparent 1px); background-size:28px 28px;">
+
+    <sc-if value="{{ toast }}" hint-placeholder-val="{{ false }}">
+      <div style="position:fixed; top:20px; right:28px; background:#14140F; border:1.5px solid #35C7B9; padding:11px 16px; font-size:12px; letter-spacing:0.03em; color:#fff; z-index:50; text-transform:uppercase;">{{ toast }}</div>
+    </sc-if>
+
+    <!-- ===================== DASHBOARD ===================== -->
+    <sc-if value="{{ isDashboard }}" hint-placeholder-val="{{ true }}">
+      <div data-screen-label="Dashboard" style="max-width:1180px;">
+        <div style="margin-bottom:26px; border-bottom:2px solid #14140F; padding-bottom:14px;">
+          <h1 style="font-size:26px; font-weight:800; letter-spacing:0.01em; margin:0 0 5px; text-transform:uppercase;">Dashboard</h1>
+          <p style="font-size:12.5px; color:#5A564C; margin:0;">O que está rodando, o que está travado, e quanto está custando.</p>
+        </div>
+
+        <div style="display:grid; grid-template-columns:repeat(4, minmax(0,1fr)); gap:0; margin-bottom:24px; border:1.5px solid #14140F;">
+          <div style="padding:16px; border-right:1.5px solid #14140F;">
+            <div style="font-size:10px; color:#5A564C; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:8px;">Agentes ativos</div>
+            <div style="font-size:26px; font-weight:800;">{{ activeAgentCount }}<span style="font-size:13px; color:#5A564C; font-weight:500;"> / 7</span></div>
+            <div style="font-size:11px; color:#5A564C; margin-top:4px;">{{ runningSummary }}</div>
+          </div>
+          <div style="padding:16px; border-right:1.5px solid #14140F;">
+            <div style="font-size:10px; color:#5A564C; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:8px;">Execuções (total)</div>
+            <div style="font-size:26px; font-weight:800;">{{ executionTotal }}</div>
+            <div style="font-size:11px; color:#2FA98C; margin-top:4px;">{{ completedSummary }}</div>
+          </div>
+          <div style="padding:16px; border-right:1.5px solid #14140F;">
+            <div style="font-size:10px; color:#5A564C; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:8px;">Falhas / alertas</div>
+            <div style="font-size:26px; font-weight:800; color:#D6553F;">{{ failedTotal }}</div>
+            <div style="font-size:11px; color:#5A564C; margin-top:4px;">1 incidente de MCP aberto</div>
+          </div>
+          <div style="padding:16px;">
+            <div style="font-size:10px; color:#5A564C; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:8px;">Custo estimado</div>
+            <div style="font-size:26px; font-weight:800;">US${{ estimatedCost }}</div>
+            <div style="font-size:11px; color:#5A564C; margin-top:4px;">US${{ recordedCost }} registrado como real</div>
+          </div>
+        </div>
+
+        <div style="display:grid; grid-template-columns:minmax(0,1.4fr) minmax(0,1fr); gap:16px; margin-bottom:20px; align-items:start;">
+          <div style="border:1.5px solid #14140F;">
+            <div style="background:#14140F; color:#fff; padding:8px 16px; font-size:11px; letter-spacing:0.08em; text-transform:uppercase; font-weight:700;">Fluxo do grafo</div>
+            <div style="padding:18px;">
+              <div style="display:flex; align-items:center; gap:6px; overflow-x:auto; padding-bottom:6px;">
+                <sc-for list="{{ flowStages }}" as="stage" hint-placeholder-count="6">
+                  <div style="display:flex; align-items:center; gap:6px; flex-shrink:0;">
+                    <div style="padding:8px 12px; border:1px solid #14140F; font-size:11px; white-space:nowrap; font-weight:600; text-transform:uppercase;">{{ stage }}</div>
+                    <sc-if value="{{ stage }}" hint-placeholder-val="{{ true }}"><span style="color:#5A564C;">→</span></sc-if>
+                  </div>
+                </sc-for>
+              </div>
+              <div style="font-size:11px; color:#5A564C; margin-top:12px; line-height:1.6;">Supervisor → Frontend / Backend / Python-IA em paralelo → Contratos → Testes → Segurança → Review → Commit → Merge → Deploy.</div>
+            </div>
+          </div>
+
+          <div style="border:1.5px solid #14140F;">
+            <div style="background:#14140F; color:#fff; padding:8px 16px; font-size:11px; letter-spacing:0.08em; text-transform:uppercase; font-weight:700;">Custo por agente</div>
+            <div style="padding:18px;">
+              <sc-for list="{{ agents }}" as="a" hint-placeholder-count="7">
+                <sc-if value="{{ a.execCount }}" hint-placeholder-val="{{ true }}">
+                  <div style="margin-bottom:10px;">
+                    <div style="display:flex; justify-content:space-between; font-size:11.5px; margin-bottom:4px; text-transform:uppercase;"><span>{{ a.label }}</span><span style="color:#5A564C;">{{ a.costShare }}</span></div>
+                    <div style="height:6px; background:#DEDACD;"><div style="height:6px; background:#35C7B9; width:{{ a.costPct }}%;"></div></div>
+                  </div>
+                </sc-if>
+              </sc-for>
+            </div>
+          </div>
+        </div>
+
+        <div style="border:1.5px solid #14140F;">
+          <div style="background:#14140F; color:#fff; padding:8px 16px; font-size:11px; letter-spacing:0.08em; text-transform:uppercase; font-weight:700;">Requer decisão humana</div>
+          <div style="padding:16px;">
+            <sc-if value="{{ blockedTasksEmpty }}" hint-placeholder-val="{{ true }}">
+              <div style="font-size:12px; color:#5A564C;">Nenhuma decisão humana no momento.</div>
+            </sc-if>
+            <sc-for list="{{ blockedTasks }}" as="t" hint-placeholder-count="1">
+              <div style="display:flex; align-items:center; justify-content:space-between; padding:12px 14px; border:1px solid #14140F; margin-bottom:8px; background:#F6F4EC;">
+                <div>
+                  <div style="font-size:12.5px; font-weight:700;">{{ t.title }}</div>
+                  <div style="font-size:11px; color:#5A564C; margin-top:2px;">{{ t.cause }}</div>
+                </div>
+                <button onClick="{{ t.action }}" style="background:#14140F; color:#fff; border:none; padding:8px 14px; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:0.04em; cursor:pointer;">{{ t.actionLabel }}</button>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+      </div>
+    </sc-if>
+
+    <!-- ===================== AGENTES ===================== -->
+    <sc-if value="{{ isAgents }}" hint-placeholder-val="{{ false }}">
+      <div data-screen-label="Agentes" style="max-width:1180px;">
+        <div style="margin-bottom:24px; border-bottom:2px solid #14140F; padding-bottom:14px;">
+          <h1 style="font-size:26px; font-weight:800; margin:0 0 5px; text-transform:uppercase;">Manage Agents</h1>
+          <p style="font-size:12.5px; color:#5A564C; margin:0;">7 papéis definidos em src/agents/registry.py — perfil, status e histórico.</p>
+        </div>
+        <div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(300px,1fr)); gap:16px;">
+          <sc-for list="{{ agents }}" as="a" hint-placeholder-count="7">
+            <div onClick="{{ a.onSelect }}" style="cursor:pointer; border:1.5px solid #14140F; background:#F6F4EC;">
+              <div style="background:#14140F; color:#fff; padding:7px 14px; display:flex; justify-content:space-between; font-size:10.5px; letter-spacing:0.08em; text-transform:uppercase; font-weight:700;">
+                <span>Agent</span><span>{{ a.tagNumber }}</span>
+              </div>
+              <div style="display:flex; gap:12px; padding:14px;">
+                <div style="flex:1; min-width:0;">
+                  <div style="font-size:16px; font-weight:800; text-transform:uppercase; letter-spacing:0.01em;">{{ a.label }}</div>
+                  <div style="font-size:10.5px; color:#5A564C; text-transform:uppercase; letter-spacing:0.04em; margin-top:2px;">{{ a.project }}</div>
+                </div>
+                <image-slot id="avatar-{{ a.key }}" shape="rect" style="width:64px; height:64px; border:1.5px solid #14140F; flex-shrink:0;" placeholder="avatar"></image-slot>
+              </div>
+              <div style="padding:0 14px 14px;">
+                <div style="font-size:9.5px; color:#5A564C; text-transform:uppercase; letter-spacing:0.06em; margin-bottom:6px;">Métricas</div>
+                <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:6px; font-size:11px; border-top:1px solid #14140F; padding-top:10px; margin-bottom:10px;">
+                  <div class="metric-tooltip" tabindex="0" data-tooltip="Numero de execucoes em que este agente participou."><div style="font-weight:800; font-size:15px;">{{ a.execCount }}</div>EXEC</div>
+                  <div class="metric-tooltip" tabindex="0" data-tooltip="Percentual de tarefas concluidas. Tarefas em curso ou puladas nao contam como sucesso."><div style="font-weight:800; font-size:15px;">{{ a.successRate }}</div>SUCESSO</div>
+                  <div class="metric-tooltip" tabindex="0" data-tooltip="Tempo acumulado em tarefas concluidas. Dry-runs e tarefas em curso podem mostrar 0 min."><div style="font-weight:800; font-size:15px;">{{ a.totalMin }}</div>DURAÇÃO</div>
+                </div>
+                <span style="display:inline-flex; align-items:center; gap:6px; font-size:10.5px; text-transform:uppercase; letter-spacing:0.04em; padding:4px 8px; border:1px solid {{ a.statusColor }}; color:{{ a.statusColor }}; font-weight:700;">
+                  <span style="width:6px; height:6px; background:{{ a.statusColor }}; display:inline-block;"></span>{{ a.statusLabel }}
+                </span>
+              </div>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+
+      <!-- Agent detail drawer -->
+      <sc-if value="{{ agentDrawerOpen }}" hint-placeholder-val="{{ false }}">
+        <div onClick="{{ closeAgent }}" style="position:fixed; inset:0; background:rgba(20,20,15,0.4); z-index:40;"></div>
+        <div style="position:fixed; top:0; right:0; height:100%; width:420px; background:#EDEAE1; border-left:2px solid #14140F; z-index:41; overflow-y:auto;">
+          <div style="background:#14140F; color:#fff; padding:14px 20px; display:flex; justify-content:space-between; align-items:center;">
+            <span style="font-size:13px; font-weight:800; text-transform:uppercase; letter-spacing:0.04em;">{{ selectedAgent.label }}</span>
+            <button onClick="{{ closeAgent }}" style="background:none; border:1px solid rgba(255,255,255,0.4); color:#fff; width:26px; height:26px; cursor:pointer; font-size:13px;">×</button>
+          </div>
+          <div style="padding:20px; display:flex; flex-direction:column; gap:18px;">
+            <div style="display:flex; gap:12px; align-items:center;">
+              <image-slot id="avatar-drawer-{{ selectedAgent.key }}" shape="rect" style="width:72px; height:72px; border:1.5px solid #14140F; flex-shrink:0;" placeholder="avatar"></image-slot>
+              <div>
+                <div style="font-size:11px; color:#5A564C; text-transform:uppercase;">{{ selectedAgent.project }} · {{ selectedAgent.promptFile }}</div>
+                <span style="display:inline-flex; align-items:center; gap:6px; font-size:10.5px; text-transform:uppercase; letter-spacing:0.04em; padding:4px 8px; border:1px solid {{ selectedAgent.statusColor }}; color:{{ selectedAgent.statusColor }}; font-weight:700; margin-top:6px;">
+                  <span style="width:6px; height:6px; background:{{ selectedAgent.statusColor }}; display:inline-block;"></span>{{ selectedAgent.statusLabel }}
+                </span>
+              </div>
+            </div>
+
+            <div>
+              <div style="font-size:10px; text-transform:uppercase; letter-spacing:0.08em; color:#5A564C; margin-bottom:8px; border-bottom:1px solid #14140F; padding-bottom:4px;">Métricas</div>
+              <div class="metric-tooltip" tabindex="0" data-tooltip="Execucoes: participacoes do agente. Sucesso: percentual de tarefas concluidas. Duracao: tempo registrado em tarefas concluidas; testes ou tarefas em curso podem mostrar 0 min." style="display:grid; grid-template-columns:1fr 1fr; gap:1px; background:#14140F; border:1px solid #14140F;">
+                <div style="background:#F6F4EC; padding:10px;"><div style="color:#5A564C; font-size:10px; text-transform:uppercase;">Execuções</div><div style="font-weight:800; font-size:16px;">{{ selectedAgent.execCount }}</div></div>
+                <div style="background:#F6F4EC; padding:10px;"><div style="color:#5A564C; font-size:10px; text-transform:uppercase;">Sucesso</div><div style="font-weight:800; font-size:16px;">{{ selectedAgent.successRate }}</div></div>
+                <div style="background:#F6F4EC; padding:10px;"><div style="color:#5A564C; font-size:10px; text-transform:uppercase;">Duração</div><div style="font-weight:800; font-size:16px;">{{ selectedAgent.totalMin }}</div></div>
+                <div style="background:#F6F4EC; padding:10px;"><div style="color:#5A564C; font-size:10px; text-transform:uppercase;">Saúde</div><div style="font-weight:800; font-size:16px; color:{{ selectedAgent.healthColor }};">{{ selectedAgent.healthScore }}</div></div>
+              </div>
+            </div>
+
+            <div>
+              <div style="font-size:10px; text-transform:uppercase; letter-spacing:0.08em; color:#5A564C; margin-bottom:8px; border-bottom:1px solid #14140F; padding-bottom:4px;">MCPs conectados</div>
+              <div style="display:flex; gap:6px; flex-wrap:wrap;">
+                <sc-for list="{{ selectedAgent.mcps }}" as="m" hint-placeholder-count="1">
+                  <span style="font-size:10.5px; padding:5px 9px; border:1px solid #14140F; text-transform:uppercase; letter-spacing:0.02em;">{{ m }}</span>
+                </sc-for>
+              </div>
+            </div>
+
+            <div>
+              <div style="font-size:10px; text-transform:uppercase; letter-spacing:0.08em; color:#5A564C; margin-bottom:8px; border-bottom:1px solid #14140F; padding-bottom:4px;">Últimas execuções</div>
+              <div style="display:flex; flex-direction:column; gap:6px;">
+                <sc-for list="{{ selectedAgent.runs }}" as="r" hint-placeholder-count="3">
+                  <div onClick="{{ r.onOpen }}" style="cursor:pointer; display:flex; justify-content:space-between; align-items:center; padding:9px 11px; border:1px solid #14140F; font-size:11.5px; background:#F6F4EC;">
+                    <span>{{ r.feature }}</span>
+                    <span style="font-size:10px; font-weight:700; text-transform:uppercase; color:{{ r.color }};">{{ r.status }}</span>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+    </sc-if>
+
+    <!-- ===================== EXECUÇÕES ===================== -->
+    <sc-if value="{{ isExecutions }}" hint-placeholder-val="{{ false }}">
+      <div data-screen-label="Execuções" style="max-width:1180px;">
+        <div style="display:flex; align-items:flex-start; justify-content:space-between; margin-bottom:22px; border-bottom:2px solid #14140F; padding-bottom:14px;">
+          <div>
+            <h1 style="font-size:26px; font-weight:800; margin:0 0 5px; text-transform:uppercase;">Execuções</h1>
+            <p style="font-size:12.5px; color:#5A564C; margin:0;">6 execuções · 90 eventos · 90 checkpoints em SQLite.</p>
+          </div>
+          <div style="display:flex; gap:6px;">
+            <sc-for list="{{ execFilters }}" as="f" hint-placeholder-count="3">
+              <button onClick="{{ f.onClick }}" style="{{ f.style }}">{{ f.label }}</button>
+            </sc-for>
+          </div>
+        </div>
+
+        <div style="border:1.5px solid #14140F;">
+          <sc-for list="{{ filteredExecutions }}" as="e" hint-placeholder-count="4">
+            <div onClick="{{ e.onSelect }}" style="cursor:pointer; display:flex; align-items:center; gap:14px; padding:13px 16px; border-bottom:1px solid #14140F;">
+              <span style="font-size:11px; font-weight:700; color:#5A564C; width:58px;">[{{ e.tag }}]</span>
+              <div style="flex:1; min-width:0;">
+                <div style="font-size:13px; font-weight:600;">{{ e.feature }}</div>
+                <div style="font-size:10.5px; color:#5A564C; margin-top:2px;">{{ e.project }} · {{ e.date }}</div>
+              </div>
+              <div style="font-size:11px; color:#5A564C; width:70px;">{{ e.duration }}</div>
+              <div style="font-size:11px; color:#5A564C; width:130px;">{{ e.agentsLabel }}</div>
+              <span style="font-size:10px; font-weight:700; text-transform:uppercase; padding:4px 8px; border:1px solid {{ e.color }}; color:{{ e.color }};">{{ e.statusLabel }}</span>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+
+      <sc-if value="{{ execDrawerOpen }}" hint-placeholder-val="{{ false }}">
+        <div onClick="{{ closeExecution }}" style="position:fixed; inset:0; background:rgba(20,20,15,0.4); z-index:40;"></div>
+        <div style="position:fixed; top:0; right:0; height:100%; width:460px; background:#EDEAE1; border-left:2px solid #14140F; z-index:41; overflow-y:auto;">
+          <div style="background:#14140F; color:#fff; padding:14px 20px; display:flex; justify-content:space-between; align-items:center;">
+            <span style="font-size:13px; font-weight:800; text-transform:uppercase; letter-spacing:0.02em;">{{ selectedExecution.feature }}</span>
+            <button onClick="{{ closeExecution }}" style="background:none; border:1px solid rgba(255,255,255,0.4); color:#fff; width:26px; height:26px; cursor:pointer; font-size:13px;">×</button>
+          </div>
+          <div style="padding:20px; display:flex; flex-direction:column; gap:16px;">
+            <div style="display:flex; align-items:center; gap:10px;">
+              <span style="font-size:10px; font-weight:700; text-transform:uppercase; padding:4px 8px; border:1px solid {{ selectedExecution.color }}; color:{{ selectedExecution.color }};">{{ selectedExecution.statusLabel }}</span>
+              <span style="font-size:11px; color:#5A564C;">[{{ selectedExecution.tag }}] · {{ selectedExecution.project }}</span>
+            </div>
+
+            <div style="display:flex; gap:8px;">
+              <sc-if value="{{ selectedExecution.canResume }}" hint-placeholder-val="{{ false }}">
+                <button onClick="{{ resumeExecution }}" style="background:#14140F; color:#fff; border:none; padding:8px 14px; font-size:11px; font-weight:700; text-transform:uppercase; cursor:pointer;">Retomar</button>
+              </sc-if>
+              <sc-if value="{{ selectedExecution.canCancel }}" hint-placeholder-val="{{ false }}">
+                <button onClick="{{ cancelExecution }}" style="background:#fff; color:#14140F; border:1px solid #14140F; padding:8px 14px; font-size:11px; font-weight:700; text-transform:uppercase; cursor:pointer;">Cancelar</button>
+              </sc-if>
+            </div>
+
+            <div>
+              <div style="font-size:10px; text-transform:uppercase; letter-spacing:0.08em; color:#5A564C; margin-bottom:10px; border-bottom:1px solid #14140F; padding-bottom:4px;">Linha do tempo</div>
+              <sc-for list="{{ selectedExecution.timeline }}" as="step" hint-placeholder-count="6">
+                <div style="display:flex; gap:10px;">
+                  <div style="display:flex; flex-direction:column; align-items:center;">
+                    <div style="width:9px; height:9px; background:{{ step.dotColor }}; margin-top:4px; flex-shrink:0;"></div>
+                    <div style="width:1px; flex:1; background:#14140F;"></div>
+                  </div>
+                  <div style="padding-bottom:16px; flex:1;">
+                    <div style="font-size:12.5px; font-weight:700; text-transform:uppercase; letter-spacing:0.01em;">{{ step.label }}</div>
+                    <div style="font-size:11px; color:#5A564C; margin-top:2px; line-height:1.6;">{{ step.detail }}</div>
+                  </div>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+    </sc-if>
+
+    <!-- ===================== MCPs ===================== -->
+    <sc-if value="{{ isMcps }}" hint-placeholder-val="{{ false }}">
+      <div data-screen-label="MCPs" style="max-width:1180px;">
+        <div style="margin-bottom:22px; border-bottom:2px solid #14140F; padding-bottom:14px;">
+          <h1 style="font-size:26px; font-weight:800; margin:0 0 5px; text-transform:uppercase;">MCPs e Integrações</h1>
+          <p style="font-size:12.5px; color:#5A564C; margin:0;">Catálogo ilustrativo do stack real — inventário persistido ainda não existe.</p>
+        </div>
+
+        <sc-if value="{{ mcpIncidentOpen }}" hint-placeholder-val="{{ true }}">
+          <div style="display:flex; align-items:center; justify-content:space-between; gap:16px; padding:14px 18px; border:1.5px solid #D6553F; background:#F6E9E5; margin-bottom:20px;">
+            <div>
+              <div style="font-size:13px; font-weight:800; text-transform:uppercase;">MCP Design: autenticação expirada</div>
+              <div style="font-size:11.5px; color:#5A564C; margin-top:2px;">Frontend tentou publicar cards e o worker MCP pediu re-autenticação OAuth do Anthropic Design. Execução [EXEC-5] falhou.</div>
+            </div>
+            <button onClick="{{ reconnectMcp }}" style="background:#14140F; color:#fff; border:none; padding:9px 16px; font-size:11px; font-weight:700; text-transform:uppercase; cursor:pointer; flex-shrink:0;">Reconectar OAuth</button>
+          </div>
+        </sc-if>
+
+        <div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(280px,1fr)); gap:16px;">
+          <sc-for list="{{ mcps }}" as="m" hint-placeholder-count="5">
+            <div style="border:1.5px solid #14140F; background:#F6F4EC;">
+              <div style="background:#14140F; color:#fff; padding:7px 14px; display:flex; justify-content:space-between; font-size:10.5px; letter-spacing:0.06em; text-transform:uppercase; font-weight:700;">
+                <span>MCP</span>
+                <span style="color:{{ m.color }};">{{ m.statusLabel }}</span>
+              </div>
+              <div style="padding:14px;">
+                <div style="font-size:14px; font-weight:800; margin-bottom:4px;">{{ m.name }}</div>
+                <div style="font-size:11px; color:#5A564C; margin-bottom:12px;">{{ m.transport }}</div>
+                <div style="font-size:11px; color:#5A564C; display:flex; flex-direction:column; gap:4px; border-top:1px solid #14140F; padding-top:10px;">
+                  <div>AGENTES: {{ m.usedBy }}</div>
+                  <div>ÚLTIMA CHAMADA: {{ m.lastCall }}</div>
+                  <div>LATÊNCIA: {{ m.latency }}</div>
+                </div>
+                <button onClick="{{ m.onCheck }}" style="margin-top:12px; background:#fff; border:1px solid #14140F; padding:7px 12px; font-size:10.5px; font-weight:700; text-transform:uppercase; cursor:pointer; width:100%;">{{ m.checkLabel }}</button>
+              </div>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+    </sc-if>
+
+    <!-- ===================== CUSTOS ===================== -->
+    <sc-if value="{{ isCosts }}" hint-placeholder-val="{{ false }}">
+      <div data-screen-label="Custos" style="max-width:1180px;">
+        <div style="margin-bottom:22px; border-bottom:2px solid #14140F; padding-bottom:14px;">
+          <h1 style="font-size:26px; font-weight:800; margin:0 0 5px; text-transform:uppercase;">Custos e Orçamento</h1>
+          <p style="font-size:12.5px; color:#5A564C; margin:0;">Preços configuráveis em orchestrator/config.py — sem lançamentos atômicos persistidos ainda.</p>
+        </div>
+
+        <div style="display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:0; border:1.5px solid #14140F; margin-bottom:22px;">
+          <div style="padding:16px; border-right:1.5px solid #14140F;"><div style="font-size:10px; color:#5A564C; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:6px;">Tokens entrada</div><div style="font-size:20px; font-weight:800;">32.326</div></div>
+          <div style="padding:16px; border-right:1.5px solid #14140F;"><div style="font-size:10px; color:#5A564C; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:6px;">Tokens saída</div><div style="font-size:20px; font-weight:800;">160</div></div>
+          <div style="padding:16px; border-right:1.5px solid #14140F;"><div style="font-size:10px; color:#5A564C; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:6px;">Custo estimado</div><div style="font-size:20px; font-weight:800;">US$0,059</div></div>
+          <div style="padding:16px;"><div style="font-size:10px; color:#5A564C; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:6px;">Custo registrado</div><div style="font-size:20px; font-weight:800; color:#E3A93B;">US$0,00</div></div>
+        </div>
+
+        <div style="display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:16px;">
+          <div style="border:1.5px solid #14140F;">
+            <div style="background:#14140F; color:#fff; padding:8px 16px; font-size:11px; letter-spacing:0.06em; text-transform:uppercase; font-weight:700;">Custo estimado por agente</div>
+            <div style="padding:18px;">
+              <sc-for list="{{ agents }}" as="a" hint-placeholder-count="7">
+                <sc-if value="{{ a.execCount }}" hint-placeholder-val="{{ true }}">
+                  <div style="margin-bottom:12px;">
+                    <div style="display:flex; justify-content:space-between; font-size:11.5px; margin-bottom:5px; text-transform:uppercase;"><span>{{ a.label }}</span><span style="color:#5A564C;">{{ a.costShare }}</span></div>
+                    <div style="height:6px; background:#DEDACD;"><div style="height:6px; background:#35C7B9; width:{{ a.costPct }}%;"></div></div>
+                  </div>
+                </sc-if>
+              </sc-for>
+              <div style="font-size:10.5px; color:#5A564C; margin-top:6px;">Contracts, QA, Security e Reviewer ainda não têm execuções individuais registradas.</div>
+            </div>
+          </div>
+
+          <div style="border:1.5px solid #14140F;">
+            <div style="background:#14140F; color:#fff; padding:8px 16px; font-size:11px; letter-spacing:0.06em; text-transform:uppercase; font-weight:700;">Orçamento diário</div>
+            <div style="padding:18px;">
+              <div style="font-size:11px; color:#5A564C; margin-bottom:8px;">US$0,059 usados de US$5,00 (limite sugerido)</div>
+              <div style="height:8px; background:#DEDACD; margin-bottom:16px;"><div style="height:8px; background:#35C7B9; width:1.2%;"></div></div>
+              <div style="display:flex; flex-direction:column; gap:8px;">
+                <div style="display:flex; align-items:center; gap:8px; font-size:11px; color:#5A564C;"><span style="width:7px; height:7px; background:#2FA98C;"></span> ALERTA EM 50% — NÃO ATINGIDO</div>
+                <div style="display:flex; align-items:center; gap:8px; font-size:11px; color:#5A564C;"><span style="width:7px; height:7px; background:#E3A93B;"></span> ALERTA EM 80% — NÃO ATINGIDO</div>
+                <div style="display:flex; align-items:center; gap:8px; font-size:11px; color:#5A564C;"><span style="width:7px; height:7px; background:#D6553F;"></span> ALERTA EM 100% — NÃO ATINGIDO</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </sc-if>
+
+    <!-- ===================== SAÚDE ===================== -->
+    <sc-if value="{{ isHealth }}" hint-placeholder-val="{{ false }}">
+      <div data-screen-label="Saúde e incidentes" style="max-width:1180px;">
+        <div style="margin-bottom:22px; border-bottom:2px solid #14140F; padding-bottom:14px;">
+          <h1 style="font-size:26px; font-weight:800; margin:0 0 5px; text-transform:uppercase;">Saúde e Incidentes</h1>
+          <p style="font-size:12.5px; color:#5A564C; margin:0;">Nota 0–100 por agente, a partir de tokens, retries, conflitos e compactação.</p>
+        </div>
+
+        <div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(220px,1fr)); gap:0; border:1.5px solid #14140F; margin-bottom:24px;">
+          <sc-for list="{{ agents }}" as="a" hint-placeholder-count="7">
+            <div style="padding:14px; border-right:1px solid #14140F; border-bottom:1px solid #14140F;">
+              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                <span style="font-size:11.5px; font-weight:700; text-transform:uppercase;">{{ a.label }}</span>
+                <span style="font-size:15px; font-weight:800; color:{{ a.healthColor }};">{{ a.healthScore }}</span>
+              </div>
+              <div style="height:6px; background:#DEDACD; margin-bottom:6px;"><div style="height:6px; background:{{ a.healthColor }}; width:{{ a.healthScore }}%;"></div></div>
+              <div style="font-size:10.5px; color:#5A564C; text-transform:uppercase;">{{ a.healthLabel }}</div>
+            </div>
+          </sc-for>
+        </div>
+
+        <div style="border:1.5px solid #14140F;">
+          <div style="background:#14140F; color:#fff; padding:8px 16px; font-size:11px; letter-spacing:0.06em; text-transform:uppercase; font-weight:700;">Incidentes</div>
+          <div style="padding:6px 18px;">
+            <sc-for list="{{ incidents }}" as="inc" hint-placeholder-count="2">
+              <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:14px; padding:13px 0; border-bottom:1px solid #14140F;">
+                <div>
+                  <div style="display:flex; align-items:center; gap:8px; margin-bottom:3px;">
+                    <span style="font-size:10px; font-weight:700; text-transform:uppercase; padding:3px 7px; border:1px solid {{ inc.color }}; color:{{ inc.color }};">{{ inc.severity }}</span>
+                    <span style="font-size:13px; font-weight:700;">{{ inc.title }}</span>
+                  </div>
+                  <div style="font-size:11px; color:#5A564C;">{{ inc.detail }}</div>
+                </div>
+                <div style="font-size:10.5px; color:#5A564C; white-space:nowrap; text-transform:uppercase;">{{ inc.status }}</div>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+      </div>
+    </sc-if>
+
+    <!-- ===================== PROJETOS ===================== -->
+    <sc-if value="{{ isProjects }}" hint-placeholder-val="{{ false }}">
+      <div data-screen-label="Projetos" style="max-width:1180px;">
+        <div style="margin-bottom:22px; border-bottom:2px solid #14140F; padding-bottom:14px;">
+          <h1 style="font-size:26px; font-weight:800; margin:0 0 5px; text-transform:uppercase;">Projetos, Ambientes e Worktrees</h1>
+          <p style="font-size:12.5px; color:#5A564C; margin:0;">Aliases resolvidos pelo detector (docs/discovery/project-discovery.md).</p>
+        </div>
+        <div style="border:1.5px solid #14140F;">
+          <sc-for list="{{ projects }}" as="p" hint-placeholder-count="3">
+            <div style="display:flex; align-items:center; gap:18px; padding:16px 18px; border-bottom:1px solid #14140F;">
+              <div style="flex:1;">
+                <div style="font-size:13.5px; font-weight:800; text-transform:uppercase;">{{ p.name }}</div>
+                <div style="font-size:11px; color:#5A564C; margin-top:2px;">{{ p.alias }} · {{ p.stack }}</div>
+              </div>
+              <div style="font-size:11px; color:#5A564C; width:150px;">PAPEL: {{ p.role }}</div>
+              <div style="font-size:11px; color:#5A564C; width:190px;">WORKTREE: {{ p.worktree }}</div>
+              <span style="font-size:10px; font-weight:700; text-transform:uppercase; padding:4px 8px; border:1px solid #2FA98C; color:#2FA98C;">{{ p.status }}</span>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+    </sc-if>
+
+    <!-- ===================== AUDITORIA ===================== -->
+    <sc-if value="{{ isAudit }}" hint-placeholder-val="{{ false }}">
+      <div data-screen-label="Auditoria" style="max-width:1180px;">
+        <div style="margin-bottom:22px; border-bottom:2px solid #14140F; padding-bottom:14px;">
+          <h1 style="font-size:26px; font-weight:800; margin:0 0 5px; text-transform:uppercase;">Auditoria e Configurações</h1>
+          <p style="font-size:12.5px; color:#5A564C; margin:0;">Flags de segurança lidos do .env — alterá-los aqui é apenas simulação.</p>
+        </div>
+
+        <div style="border:1.5px solid #14140F; margin-bottom:20px;">
+          <sc-for list="{{ flags }}" as="fl" hint-placeholder-count="3">
+            <div style="display:flex; align-items:center; justify-content:space-between; padding:16px 18px; border-bottom:1px solid #14140F;">
+              <div>
+                <div style="font-size:12.5px; font-weight:700;">{{ fl.label }}</div>
+                <div style="font-size:11px; color:#5A564C; margin-top:2px;">{{ fl.desc }}</div>
+              </div>
+              <button onClick="{{ fl.toggle }}" style="{{ fl.switchStyle }}">
+                <span style="{{ fl.knobStyle }}"></span>
+              </button>
+            </div>
+          </sc-for>
+        </div>
+
+        <div style="border:1.5px solid #14140F;">
+          <div style="background:#14140F; color:#fff; padding:8px 16px; font-size:11px; letter-spacing:0.06em; text-transform:uppercase; font-weight:700;">Log de ações desta sessão</div>
+          <div style="padding:14px 18px;">
+            <sc-if value="{{ auditLogEmpty }}" hint-placeholder-val="{{ true }}">
+              <div style="font-size:11.5px; color:#5A564C; font-style:italic;">Nenhuma ação registrada ainda nesta sessão.</div>
+            </sc-if>
+            <sc-for list="{{ auditLog }}" as="log" hint-placeholder-count="0">
+              <div style="display:flex; gap:10px; font-size:11.5px; padding:7px 0; border-bottom:1px solid #DEDACD;">
+                <span style="color:#5A564C; white-space:nowrap;">{{ log.time }}</span>
+                <span>{{ log.text }}</span>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+      </div>
+    </sc-if>
+
+  </main>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+
+class Component extends DCLogic {
+  static AGENT_DEFS = [
+    { key: "frontend", label: "Frontend", tagNumber: "#001", project: "bezalel-app", promptFile: "frontend.md",
+      execCount: 3, success: 2, fail: 1, totalMin: 21, mcps: ["Codex CLI", "MCP Design"], statusKey: "attention" },
+    { key: "backend", label: "Backend", tagNumber: "#002", project: "Bezalel (.NET 8)", promptFile: "backend.md",
+      execCount: 3, success: 2, fail: 1, totalMin: 6, mcps: ["Codex CLI", "GitHub MCP"], statusKey: "attention" },
+    { key: "python_ai", label: "Python/IA", tagNumber: "#003", project: "Workflow-IA", promptFile: "python_ai.md",
+      execCount: 3, success: 2, fail: 1, totalMin: 6, mcps: ["Codex CLI"], statusKey: "attention" },
+    { key: "contracts", label: "Contracts", tagNumber: "#004", project: "backend", promptFile: "contracts.md",
+      execCount: 0, success: 0, fail: 0, totalMin: 0, mcps: ["Codex CLI"], statusKey: "idle" },
+    { key: "qa", label: "QA", tagNumber: "#005", project: "backend", promptFile: "qa.md",
+      execCount: 0, success: 0, fail: 0, totalMin: 0, mcps: ["Codex CLI"], statusKey: "idle" },
+    { key: "security", label: "Security/Cloud", tagNumber: "#006", project: "backend", promptFile: "security.md",
+      execCount: 0, success: 0, fail: 0, totalMin: 0, mcps: ["Codex CLI"], statusKey: "idle" },
+    { key: "reviewer", label: "Code Reviewer", tagNumber: "#007", project: "backend", promptFile: "reviewer.md",
+      execCount: 0, success: 0, fail: 0, totalMin: 0, mcps: ["Codex CLI", "GitHub MCP"], statusKey: "idle" },
+  ];
+
+  static EXECUTION_DEFS = [
+    { id: "exec-1", tag: "EXEC-1", feature: "Adicionar filtro de status na galeria", project: "bezalel-app", date: "02 set", duration: "8 min", status: "completed", agentKeys: ["frontend"] },
+    { id: "exec-2", tag: "EXEC-2", feature: "Endpoint de exportação de execuções em CSV", project: "Bezalel (.NET 8)", date: "03 set", duration: "4 min", status: "completed", agentKeys: ["backend"] },
+    { id: "exec-3", tag: "EXEC-3", feature: "Ajustar prompt de geração de copy sazonal", project: "Workflow-IA", date: "04 set", duration: "5 min", status: "completed", agentKeys: ["python_ai"] },
+    { id: "exec-4", tag: "EXEC-4", feature: "Histórico de créditos por agente no painel", project: "bezalel-app + Bezalel + Workflow-IA", date: "06 set", duration: "24 min", status: "completed", agentKeys: ["frontend", "backend", "python_ai"] },
+    { id: "exec-5", tag: "EXEC-5", feature: "Publicar cards de campanha no MCP Design", project: "bezalel-app", date: "08 set", duration: "6 min", status: "failed", agentKeys: ["frontend"], failReason: "MCP Design pediu re-autenticação OAuth do Anthropic Design." },
+    { id: "exec-6", tag: "EXEC-6", feature: "Sincronizar contratos de API com Workflow-IA", project: "Bezalel (.NET 8) + Workflow-IA", date: "09 set", duration: "9 min", status: "failed", agentKeys: ["backend", "python_ai"], failReason: "Conflito de contrato detectado na etapa de validação - schemas divergentes." },
+  ];
+
+  static MCP_DEFS = [
+    { id: "mcp-design", name: "MCP Design (Anthropic)", transport: "stdio - OAuth", statusKey: "expired", usedBy: "Frontend", lastCall: "08 set, 14:32", latency: "-" },
+    { id: "mcp-codex", name: "Codex CLI", transport: "subprocess - codex exec", statusKey: "connected", usedBy: "Todos os agentes", lastCall: "09 set, 09:10", latency: "180ms" },
+    { id: "mcp-github", name: "GitHub MCP", transport: "stdio - token", statusKey: "connected", usedBy: "Backend, Code Reviewer", lastCall: "06 set, 18:02", latency: "240ms" },
+    { id: "mcp-checkpoint", name: "SQLite Checkpointer", transport: "local - data/orchestrator.sqlite3", statusKey: "connected", usedBy: "Supervisor", lastCall: "09 set, 09:10", latency: "4ms" },
+    { id: "mcp-langsmith", name: "LangSmith", transport: "https - opcional (LANGSMITH_TRACING)", statusKey: "disconnected", usedBy: "Supervisor", lastCall: "-", latency: "-" },
+  ];
+
+  static FLOW_STAGES = ["Análise", "Descoberta", "Plano", "Agentes paralelos", "Contratos", "Testes", "Segurança", "Review", "Commit -> Merge -> Deploy"];
+
+  static COLOR = { success: "#2FA98C", danger: "#D6553F", warning: "#E3A93B", idle: "#9B9689", teal: "#35C7B9" };
+
+  state = {
+    view: "dashboard",
+    selectedAgentKey: null,
+    selectedExecutionId: null,
+    mcpIncidentOpen: true,
+    mcps: Component.MCP_DEFS.map(function (m) { return Object.assign({}, m); }),
+    execFilter: "all",
+    flags: { deploy: false, autoCommit: false, autoMerge: false },
+    auditLog: [],
+    toast: null,
+    liveData: null,
+    liveAgents: {},
+  };
+
+  componentDidMount() {
+    this.refreshDashboard();
+    this._dashboardPoll = setInterval(() => this.refreshDashboard(), 2000);
+    this.eventSource = new EventSource("/events");
+    this.eventSource.addEventListener("orchestration", (message) => {
+      const event = JSON.parse(message.data);
+      if (event.type === "agent.started" || event.type === "agent.finished") {
+        const running = event.status === "running";
+        this.setState((s) => ({ liveAgents: Object.assign({}, s.liveAgents, {
+          [event.agent]: { statusKey: running ? "running" : (event.status === "failed" || event.status === "blocked" ? "attention" : "idle") }
+        }) }));
+        this.pushLog((running ? "Agente iniciado: " : "Agente finalizado: ") + event.agent + " [" + event.status + "]");
+      } else if (event.type === "state.updated") {
+        this.pushLog("LangGraph: " + event.node + " [" + event.status + "]");
+      }
+      this.refreshDashboard();
+    });
+    this.eventSource.onerror = () => this.showToast("Conexão ao vivo indisponível; atualizando por consulta.");
+  }
+
+  componentWillUnmount() {
+    if (this.eventSource) this.eventSource.close();
+    if (this._dashboardPoll) clearInterval(this._dashboardPoll);
+  }
+
+  refreshDashboard() {
+    fetch("/dashboard-data")
+      .then((response) => response.ok ? response.json() : Promise.reject(new Error("dashboard-data unavailable")))
+      .then((data) => {
+        const metrics = Object.fromEntries(data.agents.map((item) => [item.agent, item]));
+        const agents = Component.AGENT_DEFS.map((agent) => {
+          const metric = metrics[agent.key];
+          if (!metric) return Object.assign({}, agent, {
+            execCount: 0,
+            success: 0,
+            fail: 0,
+            totalMin: 0,
+            statusKey: "idle",
+          });
+          return Object.assign({}, agent, {
+            execCount: metric.runs,
+            success: metric.completed,
+            fail: metric.failed,
+            totalMin: Math.max(0, Math.round(metric.duration_seconds / 60)),
+            statusKey: metric.failed ? "attention" : "idle",
+          });
+        });
+        const executions = data.items.map((item, index) => ({
+          id: item.execution_id,
+          tag: "EXEC-" + (index + 1),
+          feature: item.feature_request,
+          project: item.project_id,
+          date: item.updated_at ? item.updated_at.slice(0, 10) : "-",
+          duration: "-",
+          status: item.status,
+          agentKeys: item.agent_keys,
+          failReason: (item.context_health.reasons || []).join("; ") || "Execução não concluída.",
+        }));
+        const activeAgents = Object.fromEntries((data.active_agents || []).map((item) => [item.agent, { statusKey: "running" }]));
+        this.setState((s) => ({
+          liveData: { agents: agents, executions: executions, summary: data.executions, usage: data.usage },
+          liveAgents: activeAgents,
+        }));
+      })
+      .catch(() => this.showToast("Dados reais indisponíveis; exibindo último snapshot."));
+  }
+
+  showToast(text) {
+    this.setState({ toast: text });
+    if (this._toastTimer) clearTimeout(this._toastTimer);
+    this._toastTimer = setTimeout(() => this.setState({ toast: null }), 2600);
+  }
+
+  pushLog(text) {
+    const time = new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+    this.setState(function (s) {
+      const next = [{ time: time, text: text }].concat(s.auditLog).slice(0, 20);
+      return { auditLog: next };
+    });
+  }
+
+  buildAgents() {
+    const COLOR = Component.COLOR;
+    const self = this;
+    const agentDefs = this.state.liveData ? this.state.liveData.agents : Component.AGENT_DEFS;
+    const executionDefs = this.state.liveData ? this.state.liveData.executions : Component.EXECUTION_DEFS;
+    const totalMin = agentDefs.reduce(function (s, a) { return s + a.totalMin; }, 0);
+    const liveAgents = this.state.liveAgents;
+    return agentDefs.map(function (a) {
+      const successRate = a.execCount ? Math.round((a.success / a.execCount) * 100) + "%" : "-";
+      const healthScore = a.execCount === 0 ? 100 : Math.max(55, 100 - a.fail * 22);
+      const healthColor = healthScore >= 85 ? COLOR.success : healthScore >= 65 ? COLOR.warning : COLOR.danger;
+      const healthLabel = healthScore >= 85 ? "Saudável" : healthScore >= 65 ? "Atenção" : "Crítico";
+      const statusMap = {
+        attention: { label: "Aguardando revisão", color: COLOR.warning },
+        idle: { label: "Ocioso", color: COLOR.idle },
+        running: { label: "Executando agora", color: COLOR.teal },
+      };
+      const live = liveAgents[a.key];
+      const st = statusMap[(live && live.statusKey) || a.statusKey] || statusMap.idle;
+      const costPct = totalMin ? Math.round((a.totalMin / totalMin) * 100) : 0;
+      const runs = executionDefs.filter(function (e) { return e.agentKeys.indexOf(a.key) !== -1; }).map(function (e) {
+        return {
+          execId: e.id, feature: e.feature,
+          status: e.status === "completed" ? "Concluída" : e.status === "running" ? "Em execução" : "Falhou",
+          color: e.status === "completed" ? COLOR.success : e.status === "running" ? COLOR.teal : COLOR.danger,
+          onOpen: function () { self.setState({ view: "executions", selectedAgentKey: null, selectedExecutionId: e.id }); },
+        };
+      });
+      return Object.assign({}, a, {
+        successRate: successRate, totalMin: a.totalMin + " min", healthScore: healthScore, healthColor: healthColor, healthLabel: healthLabel,
+        statusLabel: st.label, statusColor: st.color,
+        costPct: costPct, costShare: a.execCount ? (a.totalMin + " min") : "sem custo",
+        runs: runs,
+        onSelect: function () { self.setState({ selectedAgentKey: a.key }); },
+      });
+    });
+  }
+
+  buildExecutions(agents) {
+    const COLOR = Component.COLOR;
+    const self = this;
+    const agentByKey = {};
+    agents.forEach(function (a) { agentByKey[a.key] = a; });
+    const executionDefs = this.state.liveData ? this.state.liveData.executions : Component.EXECUTION_DEFS;
+    return executionDefs.map(function (e) {
+      const completed = e.status === "completed";
+      const timeline = [
+        { label: "Solicitação", detail: e.feature, dotColor: COLOR.success },
+        { label: "Descoberta", detail: "Alvo resolvido: " + e.project, dotColor: COLOR.success },
+        { label: "Plano", detail: "Plano gerado pelo supervisor com dependências mapeadas.", dotColor: COLOR.success },
+        { label: "Agentes paralelos", detail: e.agentKeys.map(function (k) { return agentByKey[k] ? agentByKey[k].label : k; }).join(", "), dotColor: completed ? COLOR.success : COLOR.danger },
+      ];
+      if (completed) {
+        timeline.push(
+          { label: "Contratos, testes e segurança", detail: "Gates passaram sem bloqueios.", dotColor: COLOR.success },
+          { label: "Review e commit", detail: "Aprovado por Code Reviewer; commit local criado.", dotColor: COLOR.success },
+          { label: "Merge / Deploy", detail: "Merge concluído. Deploy de produção bloqueado (ALLOW_PRODUCTION_DEPLOY=false).", dotColor: COLOR.success }
+        );
+      } else {
+        timeline.push({ label: "Falha", detail: e.failReason, dotColor: COLOR.danger });
+      }
+      return Object.assign({}, e, {
+        statusLabel: completed ? "Concluída" : e.status === "running" ? "Em execução" : "Falhou", color: completed ? COLOR.success : e.status === "running" ? COLOR.teal : COLOR.danger,
+        agentsLabel: e.agentKeys.map(function (k) { return agentByKey[k] ? agentByKey[k].label : k; }).join(", "),
+        canCancel: false, canResume: !completed,
+        timeline: timeline,
+        onSelect: function () { self.setState({ selectedExecutionId: e.id }); },
+      });
+    });
+  }
+
+  navTo(view) {
+    return () => this.setState({ view: view, selectedAgentKey: null, selectedExecutionId: null });
+  }
+
+  navBtnStyle(view) {
+    const active = this.state.view === view;
+    return {
+      display: "flex", alignItems: "center", gap: 8, padding: "9px 12px",
+      fontSize: 11.5, letterSpacing: "0.04em", textAlign: "left", border: "none", cursor: "pointer", width: "100%",
+      background: active ? "#35C7B9" : "transparent",
+      color: active ? "#14140F" : "rgba(255,255,255,0.6)",
+      fontWeight: active ? 800 : 600,
+    };
+  }
+
+  renderVals() {
+    const COLOR = Component.COLOR;
+    const agents = this.buildAgents();
+    const executions = this.buildExecutions(agents);
+    const selectedAgent = agents.filter((a) => a.key === this.state.selectedAgentKey)[0] || {};
+    const selectedExecution = executions.filter((e) => e.id === this.state.selectedExecutionId)[0] || {};
+
+    const execFilterDefs = [
+      { key: "all", label: "TODAS" },
+      { key: "completed", label: "CONCLUÍDAS" },
+      { key: "failed", label: "FALHARAM" },
+    ];
+    const filteredExecutions = executions.filter((e) => this.state.execFilter === "all" || e.status === this.state.execFilter);
+    const execFilters = execFilterDefs.map((f) => {
+      const active = this.state.execFilter === f.key;
+      return {
+        label: f.label, onClick: () => this.setState({ execFilter: f.key }),
+        style: { background: active ? "#14140F" : "#fff", color: active ? "#fff" : "#14140F", border: "1px solid #14140F", padding: "7px 12px", fontSize: 10.5, fontWeight: 700, cursor: "pointer", letterSpacing: "0.03em" },
+      };
+    });
+
+    const mcps = this.state.mcps.map((m) => {
+      const colorMap = { connected: COLOR.success, expired: COLOR.danger, disconnected: COLOR.idle };
+      const labelMap = { connected: "Conectado", expired: "Autenticação expirada", disconnected: "Desconectado" };
+      return Object.assign({}, m, {
+        color: colorMap[m.statusKey], statusLabel: labelMap[m.statusKey],
+        checkLabel: m.statusKey === "expired" ? "Verificar novamente" : "Health check",
+        onCheck: () => {
+          this.pushLog("Health check disparado em " + m.name + ".");
+          this.showToast("Health check enviado - " + m.name);
+        },
+      });
+    });
+
+    const incidents = [
+      { title: "MCP Design: autenticação expirada", detail: "[EXEC-5] falhou ao publicar cards de campanha - worker MCP exigiu OAuth do Anthropic Design.", severity: "Crítico", color: COLOR.danger, status: this.state.mcpIncidentOpen ? "Aberto" : "Resolvido" },
+      { title: "Conflito de contrato entre Backend e Workflow-IA", detail: "[EXEC-6] falhou na etapa de validação de contratos - schemas divergentes entre projetos.", severity: "Atenção", color: COLOR.warning, status: "Aberto" },
+    ];
+
+    const projects = [
+      { name: "bezalel-app", alias: "../bezalel-app", stack: "React / Vite", role: "Frontend", worktree: "main (sem worktree isolada)", status: "Saudável" },
+      { name: "Bezalel", alias: "../Bezalel", stack: ".NET 8", role: "Backend", worktree: "main (sem worktree isolada)", status: "Saudável" },
+      { name: "Workflow-IA", alias: "../Workflow-IA", stack: "Python / LangGraph", role: "Python/IA", worktree: "main (sem worktree isolada)", status: "Saudável" },
+    ];
+
+    const blockedTasks = this.state.liveData
+      ? this.state.liveData.executions
+        .filter((execution) => execution.status === "blocked" || execution.status === "failed")
+        .map((execution) => ({
+          title: "[" + execution.tag + "] " + execution.feature,
+          cause: execution.failReason || "Execução bloqueada; requer análise.",
+          action: () => this.setState({ view: "executions", selectedExecutionId: execution.id }),
+          actionLabel: "Ver execução",
+        }))
+      : [];
+
+    const switchStyle = (on) => ({ width: 40, height: 20, border: "1.5px solid #14140F", background: on ? "#35C7B9" : "#fff", position: "relative", cursor: "pointer", padding: 0, flexShrink: 0 });
+    const knobStyle = (on) => ({ position: "absolute", top: 1, left: on ? 20 : 1, width: 16, height: 16, background: "#14140F" });
+
+    const flags = [
+      { key: "deploy", label: "ALLOW_PRODUCTION_DEPLOY", desc: "Permite deploy de produção ao final do pipeline.", switchStyle: switchStyle(this.state.flags.deploy), knobStyle: knobStyle(this.state.flags.deploy),
+        toggle: () => { const v = !this.state.flags.deploy; this.setState((s) => ({ flags: Object.assign({}, s.flags, { deploy: v }) })); this.pushLog("ALLOW_PRODUCTION_DEPLOY definido para " + v + "."); } },
+      { key: "autoCommit", label: "AUTO_COMMIT", desc: "Permite commit automático sem aprovação humana.", switchStyle: switchStyle(this.state.flags.autoCommit), knobStyle: knobStyle(this.state.flags.autoCommit),
+        toggle: () => { const v = !this.state.flags.autoCommit; this.setState((s) => ({ flags: Object.assign({}, s.flags, { autoCommit: v }) })); this.pushLog("AUTO_COMMIT definido para " + v + "."); } },
+      { key: "autoMerge", label: "AUTO_MERGE", desc: "Permite merge automático após aprovação de review.", switchStyle: switchStyle(this.state.flags.autoMerge), knobStyle: knobStyle(this.state.flags.autoMerge),
+        toggle: () => { const v = !this.state.flags.autoMerge; this.setState((s) => ({ flags: Object.assign({}, s.flags, { autoMerge: v }) })); this.pushLog("AUTO_MERGE definido para " + v + "."); } },
+    ];
+
+    const summary = this.state.liveData ? this.state.liveData.summary : { total: 6, completed: 4, failed: 2, running: 0 };
+    const usage = this.state.liveData ? this.state.liveData.usage : { estimated_cost_usd: 0.059, recorded_cost_usd: 0 };
+
+    return {
+      isDashboard: this.state.view === "dashboard",
+      isAgents: this.state.view === "agents",
+      isExecutions: this.state.view === "executions",
+      isMcps: this.state.view === "mcps",
+      isCosts: this.state.view === "costs",
+      isHealth: this.state.view === "health",
+      isProjects: this.state.view === "projects",
+      isAudit: this.state.view === "audit",
+      navItems: [
+        { key: "dashboard", label: "DASHBOARD" },
+        { key: "agents", label: "AGENTES" },
+        { key: "executions", label: "EXECUÇÕES" },
+        { key: "mcps", label: "MCPS" },
+        { key: "costs", label: "CUSTOS" },
+        { key: "health", label: "SAÚDE" },
+        { key: "projects", label: "PROJETOS" },
+        { key: "audit", label: "AUDITORIA" },
+      ].map((n) => ({ label: n.label, onClick: () => this.setState({ view: n.key, selectedAgentKey: null, selectedExecutionId: null }), style: this.navBtnStyle(n.key) })),
+      toast: this.state.toast,
+      activeAgentCount: Object.keys(this.state.liveAgents).length,
+      runningSummary: summary.running ? summary.running + " execução(ões) em andamento" : "Nenhuma execução em andamento",
+      executionTotal: summary.total,
+      completedSummary: summary.completed + " concluída(s)",
+      failedTotal: summary.failed,
+      estimatedCost: Number(usage.estimated_cost_usd).toFixed(3).replace(".", ","),
+      recordedCost: Number(usage.recorded_cost_usd).toFixed(3).replace(".", ","),
+      flowStages: Component.FLOW_STAGES,
+      agents: agents, blockedTasks: blockedTasks, blockedTasksEmpty: blockedTasks.length === 0,
+
+      closeAgent: () => this.setState({ selectedAgentKey: null }),
+      agentDrawerOpen: !!this.state.selectedAgentKey,
+      selectedAgent: selectedAgent,
+
+      execFilters: execFilters, filteredExecutions: filteredExecutions,
+      closeExecution: () => this.setState({ selectedExecutionId: null }),
+      execDrawerOpen: !!this.state.selectedExecutionId,
+      selectedExecution: selectedExecution,
+      resumeExecution: () => { this.pushLog("Retomada solicitada para " + selectedExecution.tag + "."); this.showToast("Retomando " + selectedExecution.tag + "..."); },
+      cancelExecution: () => { this.pushLog("Cancelamento solicitado para " + selectedExecution.tag + "."); this.showToast(selectedExecution.tag + " cancelada."); },
+
+      mcps: mcps,
+      mcpIncidentOpen: this.state.mcpIncidentOpen,
+      reconnectMcp: () => {
+        this.setState((s) => ({ mcpIncidentOpen: false, mcps: s.mcps.map((m) => m.id === "mcp-design" ? Object.assign({}, m, { statusKey: "connected", lastCall: "agora", latency: "210ms" }) : m) }));
+        this.pushLog("MCP Design reconectado via OAuth.");
+        this.showToast("MCP Design reconectado.");
+      },
+
+      incidents: incidents, projects: projects,
+      flags: flags, auditLog: this.state.auditLog, auditLogEmpty: this.state.auditLog.length === 0,
+    };
+  }
+}
+
+</script>
+</body>
+</html>

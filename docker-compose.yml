@@ -1,0 +1,12 @@
+services:
+  orchestrator:
+    build: .
+    env_file: .env
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+      - ../bezalel-app:/workspaces/bezalel-app
+      - ../Bezalel:/workspaces/Bezalel
+      - ../Workflow-IA:/workspaces/Workflow-IA
+
