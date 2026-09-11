@@ -155,6 +155,7 @@
   // re-encode keeps only the first frame, so an animated GIF would silently
   // go still — better to reject than surprise.
   const ACCEPT = ['image/png', 'image/jpeg', 'image/webp', 'image/avif'];
+  const PROFILE_ASSETS_ENDPOINT = '/profile-assets';
 
   // ── Shared sidecar store ────────────────────────────────────────────────
   // One fetch + immediate write-on-change for every <image-slot> on the
@@ -267,6 +268,38 @@
     // it. Gate on the initial read so we don't overwrite a sidecar we haven't
     // merged yet; the merge in load() keeps this change once the read lands.
     if (loaded) save(); else load().then(save);
+  }
+
+  // Best-effort hosted persistence. The local slot is committed first, so
+  // local/static/offline previews keep working when this endpoint is absent.
+  async function uploadRemote(id, value) {
+    if (!id || !value || typeof value.u !== 'string' ||
+        !/^data:image\//i.test(value.u)) return null;
+    const comma = value.u.indexOf(',');
+    if (comma < 0) return null;
+    const header = value.u.slice(0, comma);
+    const dataUrl = value.u.slice(comma + 1);
+    const match = /^data:([^;,]+)/i.exec(header);
+    const contentType = match ? match[1].toLowerCase() : 'image/webp';
+    if (ACCEPT.indexOf(contentType) < 0 || !dataUrl) return null;
+    const controller = typeof AbortController === 'function' ? new AbortController() : null;
+    const timeout = controller ? setTimeout(() => controller.abort(), 12000) : null;
+    try {
+      const response = await fetch(PROFILE_ASSETS_ENDPOINT, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, data_url: value.u, content_type: contentType }),
+        signal: controller ? controller.signal : undefined,
+      });
+      if (!response.ok) return null;
+      const result = await response.json().catch(() => null);
+      return result && typeof result.url === 'string' ? result.url : null;
+    } catch (e) {
+      return null;
+    } finally {
+      if (timeout) clearTimeout(timeout);
+    }
   }
 
   // ── Image downscale ─────────────────────────────────────────────────────
@@ -932,6 +965,14 @@
         // Keep a session-local copy for id-less slots so the drop still
         // shows, even though it cannot persist.
         if (!this.id) { this._local = val; this._render(); }
+        // Upgrade the local data URL to a hosted asset when the API is
+        // available. If it fails, the already-committed local value remains.
+        if (this.id) {
+          const remoteUrl = await uploadRemote(this.id, val);
+          if (remoteUrl && gen === this._gen) {
+            setSlot(this.id, { ...val, u: remoteUrl });
+          }
+        }
       } catch (err) {
         if (gen !== this._gen) return;
         this._swapGen = 0;
@@ -1109,10 +1150,14 @@
 
       // Content. The sidecar is also writable by the agent's write_file
       // tool, so its value isn't guaranteed canvas-originated — only accept
-      // data:image/ URLs from it. The `src` attribute is author-controlled
-      // (Claude wrote it into the HTML) so it passes through unchanged.
+      // local data URLs and HTTPS URLs returned by profile-assets. The `src`
+      // attribute is author-controlled (Claude wrote it into the HTML) so it
+      // passes through unchanged.
       let stored = this.id ? getSlot(this.id) : this._local;
-      if (stored && stored.u && !/^data:image\//i.test(stored.u)) stored = null;
+      if (stored && stored.u &&
+          !/^data:image\//i.test(stored.u) && !/^https?:\/\//i.test(stored.u)) {
+        stored = null;
+      }
       const srcAttr = this.getAttribute('src') || '';
       this._userUrl = (stored && stored.u) || null;
       const url = this._userUrl || srcAttr;

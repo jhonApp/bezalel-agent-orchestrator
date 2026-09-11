@@ -1,7 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import json
+import os
+import re
+import urllib.error
+import urllib.parse
+import urllib.request
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -10,18 +17,86 @@ try:
     from fastapi import FastAPI, HTTPException
     from fastapi.responses import HTMLResponse, StreamingResponse
     from fastapi.staticfiles import StaticFiles
+    from pydantic import BaseModel
 except ImportError:  # pragma: no cover - exercised only before optional install
     FastAPI = None
     HTTPException = RuntimeError
     HTMLResponse = str
     StreamingResponse = None
     StaticFiles = None
+    BaseModel = object
 
 from orchestrator.config import Settings
 from orchestrator.graph import OrchestrationGraph
 from agents.registry import AGENT_ROLES
 from observability.live_events import LiveEventBroker
 from schemas.models import ExecutionRequest
+
+
+class ProfileAssetRequest(BaseModel):
+    """Small JSON contract used by the dashboard avatar uploader."""
+
+    id: str
+    data_url: str
+    content_type: str
+
+
+_PROFILE_CONTENT_TYPES = {"image/png", "image/jpeg", "image/webp", "image/gif", "image/avif"}
+_PROFILE_DATA_URL = re.compile(r"^data:(?P<type>image/[a-z0-9.+-]+);base64,(?P<data>[A-Za-z0-9+/=\s]+)$", re.I)
+# Leave room for the base64/JSON envelope under Vercel's function body limit.
+_PROFILE_MAX_BYTES = 3 * 1024 * 1024
+
+
+def _upload_profile_blob(asset: ProfileAssetRequest, payload: bytes) -> dict[str, Any]:
+    """Upload an avatar with the same server API used by ``@vercel/blob``.
+
+    Keeping this call server-side means ``BLOB_READ_WRITE_TOKEN`` is never sent
+    to the browser.  The standard-library client also keeps the Python runtime
+    lightweight for Vercel Functions.
+    """
+    token = os.environ.get("BLOB_READ_WRITE_TOKEN", "").strip()
+    if not token:
+        raise RuntimeError("BLOB_READ_WRITE_TOKEN is not configured")
+
+    # Read-write tokens have the form vercel_blob_rw_<store-id>_<secret>.
+    token_parts = token.split("_")
+    store_id = token_parts[3] if len(token_parts) > 3 else ""
+    if not store_id:
+        raise RuntimeError("BLOB_READ_WRITE_TOKEN has an invalid store id")
+
+    safe_id = re.sub(r"[^a-zA-Z0-9_-]+", "-", asset.id).strip("-")[:80] or "agent"
+    extension = asset.content_type.split("/", 1)[1].replace("jpeg", "jpg")
+    pathname = f"profiles/{safe_id}.{extension}"
+    query = urllib.parse.urlencode({"pathname": pathname})
+    request = urllib.request.Request(
+        f"https://vercel.com/api/blob/?{query}",
+        data=payload,
+        method="PUT",
+        headers={
+            "authorization": f"Bearer {token}",
+            "x-vercel-blob-store-id": store_id,
+            "x-api-version": "12",
+            "x-api-blob-request-id": f"{store_id}:{os.urandom(8).hex()}",
+            "x-api-blob-request-attempt": "0",
+            "x-vercel-blob-access": "public",
+            "x-content-type": asset.content_type,
+            "x-add-random-suffix": "1",
+            "content-type": asset.content_type,
+            "content-length": str(len(payload)),
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            result = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        # Do not include response headers/body: they may contain token metadata.
+        raise RuntimeError(f"Vercel Blob upload failed ({exc.code})") from exc
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+        raise RuntimeError("Vercel Blob upload failed") from exc
+
+    if not isinstance(result, dict) or not result.get("url"):
+        raise RuntimeError("Vercel Blob returned an invalid upload response")
+    return {"url": result["url"], "pathname": result.get("pathname", pathname), "content_type": asset.content_type}
 
 try:
     from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
@@ -78,6 +153,39 @@ def create_app(settings: Settings | None = None) -> Any:
     @app.get("/health")
     async def health() -> dict[str, Any]:
         return {"status": "ok", "project": settings.langsmith_project, "checkpoint": str(settings.checkpoint_path)}
+
+    @app.post("/profile-assets")
+    async def profile_asset(request: ProfileAssetRequest) -> dict[str, Any]:
+        """Persist a dashboard avatar in the public Vercel Blob store."""
+        content_type = request.content_type.strip().lower()
+        match = _PROFILE_DATA_URL.fullmatch(request.data_url.strip())
+        if not match or match.group("type").lower() != content_type:
+            raise HTTPException(status_code=400, detail="data_url must be a base64 image matching content_type")
+        if content_type not in _PROFILE_CONTENT_TYPES:
+            raise HTTPException(status_code=415, detail="unsupported avatar image type")
+        try:
+            payload = base64.b64decode(match.group("data"), validate=True)
+        except (ValueError, binascii.Error):
+            raise HTTPException(status_code=400, detail="data_url contains invalid base64")
+        if not payload or len(payload) > _PROFILE_MAX_BYTES:
+            raise HTTPException(status_code=413, detail="avatar must be between 1 byte and 3 MB")
+
+        # Basic magic-byte validation prevents uploading arbitrary files with
+        # an image MIME type.  The Blob store remains the source of the URL.
+        signatures = {
+            "image/png": payload.startswith(b"\x89PNG\r\n\x1a\n"),
+            "image/jpeg": payload.startswith(b"\xff\xd8\xff"),
+            "image/webp": payload.startswith(b"RIFF") and payload[8:12] == b"WEBP",
+            "image/gif": payload.startswith((b"GIF87a", b"GIF89a")),
+            "image/avif": b"ftypavif" in payload[:32] or b"ftypavis" in payload[:32],
+        }
+        if not signatures[content_type]:
+            raise HTTPException(status_code=400, detail="data_url bytes do not match content_type")
+        try:
+            result = await asyncio.to_thread(_upload_profile_blob, request, payload)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc))
+        return result
 
     @app.get("/", response_class=HTMLResponse)
     async def dashboard() -> Any:
