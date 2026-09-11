@@ -1,0 +1,13 @@
+.git/
+.codex/
+.agent-smoke*/
+.test-tmp*/
+.validation-*/
+.pytest_cache/
+.data/
+.worktrees/
+reports/
+tests/
+__pycache__/
+*.pyc
+.env
