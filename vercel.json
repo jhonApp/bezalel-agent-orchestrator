@@ -1,10 +1,7 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "rewrites": [
-    { "source": "/(.*)", "destination": "/api" }
-  ],
   "functions": {
-    "api/**/*.py": {
+    "index.py": {
       "excludeFiles": "{tests/**,.data/**,.worktrees/**,.test-tmp*/**,.agent-smoke*/**,reports/**}"
     }
   }
