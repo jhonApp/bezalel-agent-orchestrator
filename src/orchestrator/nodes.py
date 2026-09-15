@@ -291,11 +291,17 @@ async def run_contract_validation(runtime: ExecutionRuntime, state: dict[str, An
             task["status"] = "skipped"
         else:
             changed_projects = await _changed_project_ids(runtime, state)
-            if changed_projects:
+            if not changed_projects:
+                result = AgentResult(
+                    agent="contracts",
+                    status="completed",
+                    summary="No files changed; contract validation was not required.",
+                )
+            else:
                 task["project_id"] = changed_projects[0]
                 task["worktree"] = str(runtime.workdir_for(state, changed_projects[0]))
                 task["branch"] = state.get("worktrees", {}).get(changed_projects[0], {}).get("branch")
-            result = await runtime.run_task(state, task)
+                result = await runtime.run_task(state, task)
             task["result"] = result.model_dump(mode="json")
             task["status"] = "completed" if result.status == "completed" else result.status
             if result.errors:
@@ -369,11 +375,17 @@ async def code_review(runtime: ExecutionRuntime, state: dict[str, Any]) -> dict[
     if task and not state.get("approvals", {}).get("dry_run"):
         task["status"] = "running"
         changed_projects = await _changed_project_ids(runtime, state)
-        if changed_projects:
+        if not changed_projects:
+            agent = AgentResult(
+                agent="reviewer",
+                status="completed",
+                summary="No files changed; code review was not required.",
+            )
+        else:
             task["project_id"] = changed_projects[0]
             task["worktree"] = str(runtime.workdir_for(state, changed_projects[0]))
             task["branch"] = state.get("worktrees", {}).get(changed_projects[0], {}).get("branch")
-        agent = await runtime.run_task(state, task)
+            agent = await runtime.run_task(state, task)
         result = ReviewResult(status="approved" if agent.status == "completed" else "changes_requested", summary=agent.summary,
                               findings=[{"message": x} for x in agent.errors], blocking=agent.status != "completed")
         task["result"] = agent.model_dump(mode="json")

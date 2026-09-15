@@ -319,7 +319,7 @@ def create_app(settings: Settings | None = None) -> Any:
 
     @app.post("/executions/{execution_id}/cancel")
     async def cancel_execution(execution_id: str) -> dict[str, Any]:
-        state = app.state.graph.cancel(execution_id)
+        state = await app.state.graph.cancel(execution_id)
         if not state:
             raise HTTPException(status_code=404, detail="execution not found")
         return state

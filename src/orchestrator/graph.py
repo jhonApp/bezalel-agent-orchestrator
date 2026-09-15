@@ -5,6 +5,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable
 
+from langgraph.checkpoint.base import empty_checkpoint
 from langgraph.graph import END, START, StateGraph
 
 from adapters.codex_cli import CodexCLI
@@ -15,7 +16,7 @@ from orchestrator.nodes import (ExecutionRuntime, analyze_request, code_review, 
                                 run_tests, security_review)
 from orchestrator.state import ExecutionState
 from persistence.checkpointer import SQLiteCheckpointer
-from schemas.models import ExecutionRequest, initial_state
+from schemas.models import ExecutionRequest, initial_state, utc_now
 
 
 class OrchestrationGraph:
@@ -63,14 +64,24 @@ class OrchestrationGraph:
                                    dry_run=bool(state.get("approvals", {}).get("dry_run", False)))
         return await self.run(request, execution_id)
 
-    def cancel(self, execution_id: str) -> dict[str, Any] | None:
+    async def cancel(self, execution_id: str) -> dict[str, Any] | None:
         self.runtime.cancel_event(execution_id).set()
         state = self.runtime.store.load(execution_id)
         if state:
             state["status"] = "cancelled"
             state["next_action"] = "resume"
+            state["updated_at"] = utc_now()
             self.runtime.store.save(execution_id, state, "cancel")
             self.runtime.store.finish_active_agents(execution_id)
+            if self.checkpointer is not None:
+                checkpoint = empty_checkpoint()
+                checkpoint["channel_values"] = state
+                await self.checkpointer.aput(
+                    {"configurable": {"thread_id": execution_id, "checkpoint_ns": ""}},
+                    checkpoint,
+                    {"source": "input", "step": -1, "writes": {}, "parents": {}},
+                    {},
+                )
         return state
 
 
