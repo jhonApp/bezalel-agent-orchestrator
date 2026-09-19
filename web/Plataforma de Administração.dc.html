@@ -65,7 +65,53 @@
   <main style="flex:1; overflow-y:auto; padding:30px 40px 60px; background-image:linear-gradient(rgba(20,20,15,0.05) 1px, transparent 1px), linear-gradient(90deg, rgba(20,20,15,0.05) 1px, transparent 1px); background-size:28px 28px;">
 
     <sc-if value="{{ toast }}" hint-placeholder-val="{{ false }}">
-      <div style="position:fixed; top:20px; right:28px; background:#14140F; border:1.5px solid #35C7B9; padding:11px 16px; font-size:12px; letter-spacing:0.03em; color:#fff; z-index:50; text-transform:uppercase;">{{ toast }}</div>
+      <div style="position:fixed; top:20px; right:28px; background:#14140F; border:1.5px solid {{ toastColor }}; padding:11px 16px; font-size:12px; letter-spacing:0.03em; color:#fff; z-index:70; text-transform:uppercase; max-width:360px;">{{ toast }}</div>
+    </sc-if>
+
+    <sc-if value="{{ removeConfirmOpen }}" hint-placeholder-val="{{ false }}">
+      <div onClick="{{ onCancelRemoveSkill }}" style="position:fixed; inset:0; background:rgba(20,20,15,0.55); z-index:64;"></div>
+      <div style="position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); width:340px; max-width:90vw; background:#EDEAE1; border:2px solid #D6553F; z-index:65; padding:22px;">
+        <div style="font-size:13px; font-weight:800; text-transform:uppercase; letter-spacing:0.04em; color:#D6553F; margin-bottom:10px;">Remover skill</div>
+        <div style="font-size:12.5px; line-height:1.5; margin-bottom:20px;">Remover <strong>{{ removeConfirmSkill }}</strong> do projeto <strong>{{ removeConfirmProject }}</strong>? Isso desinstala a skill do repositório.</div>
+        <div style="display:flex; gap:8px; justify-content:flex-end;">
+          <button onClick="{{ onCancelRemoveSkill }}" style="font-size:10.5px; font-weight:700; text-transform:uppercase; letter-spacing:0.04em; padding:9px 14px; border:1px solid #14140F; background:#fff; color:#14140F; cursor:pointer;">Cancelar</button>
+          <button onClick="{{ onConfirmRemoveSkill }}" style="font-size:10.5px; font-weight:700; text-transform:uppercase; letter-spacing:0.04em; padding:9px 14px; border:1px solid #D6553F; background:#D6553F; color:#fff; cursor:pointer;">Remover</button>
+        </div>
+      </div>
+    </sc-if>
+
+    <!-- Falhas / alertas — painel dedicado -->
+    <sc-if value="{{ failuresPanelOpen }}" hint-placeholder-val="{{ false }}">
+      <div onClick="{{ onCloseFailuresPanel }}" style="position:fixed; inset:0; background:rgba(20,20,15,0.5); z-index:54;"></div>
+      <div style="position:fixed; top:0; right:0; height:100%; width:460px; max-width:92vw; background:#EDEAE1; border-left:2px solid #D6553F; z-index:55; overflow-y:auto;">
+        <div style="background:#14140F; color:#fff; padding:14px 20px; display:flex; justify-content:space-between; align-items:center;">
+          <span style="font-size:13px; font-weight:800; text-transform:uppercase; letter-spacing:0.04em; color:#D6553F;">Falhas ({{ failuresCount }})</span>
+          <button onClick="{{ onCloseFailuresPanel }}" style="background:none; border:1px solid rgba(255,255,255,0.4); color:#fff; width:26px; height:26px; cursor:pointer; font-size:13px;">×</button>
+        </div>
+        <div style="padding:16px 20px;">
+          <sc-if value="{{ hasFailures }}" hint-placeholder-val="{{ false }}">
+            <div style="display:flex; flex-direction:column; gap:10px;">
+              <sc-for list="{{ failuresList }}" as="f" hint-placeholder-count="3">
+                <div onClick="{{ f.onOpen }}" style="cursor:pointer; border:1.5px solid #D6553F; background:#F6F4EC; padding:14px;">
+                  <div style="display:flex; justify-content:space-between; gap:10px; align-items:baseline; margin-bottom:6px;">
+                    <span style="font-size:12.5px; font-weight:800;">{{ f.feature }}</span>
+                    <span style="font-size:9.5px; color:#5A564C; text-transform:uppercase; white-space:nowrap;">{{ f.tag }}</span>
+                  </div>
+                  <div style="font-size:10.5px; color:#5A564C; text-transform:uppercase; letter-spacing:0.03em; margin-bottom:8px;">{{ f.project }} · {{ f.when }}</div>
+                  <div style="display:flex; flex-direction:column; gap:4px;">
+                    <sc-for list="{{ f.reasons }}" as="r" hint-placeholder-count="1">
+                      <div style="font-size:11px; color:#D6553F; line-height:1.4;">▸ {{ r.text }}</div>
+                    </sc-for>
+                  </div>
+                </div>
+              </sc-for>
+            </div>
+          </sc-if>
+          <sc-if value="{{ noFailures }}" hint-placeholder-val="{{ false }}">
+            <div style="font-size:11.5px; color:#5A564C; font-style:italic;">Nenhuma falha registrada.</div>
+          </sc-if>
+        </div>
+      </div>
     </sc-if>
 
     <!-- ===================== DASHBOARD ===================== -->
@@ -87,10 +133,10 @@
             <div style="font-size:26px; font-weight:800;">{{ executionTotal }}</div>
             <div style="font-size:11px; color:#2FA98C; margin-top:4px;">{{ completedSummary }}</div>
           </div>
-          <div style="padding:16px; border-right:1.5px solid #14140F;">
+          <div onClick="{{ onOpenFailuresPanel }}" style="padding:16px; border-right:1.5px solid #14140F; cursor:pointer;" title="Ver falhas com data e horário">
             <div style="font-size:10px; color:#5A564C; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:8px;">Falhas / alertas</div>
             <div style="font-size:26px; font-weight:800; color:#D6553F;">{{ failedTotal }}</div>
-            <div style="font-size:11px; color:#5A564C; margin-top:4px;">1 incidente de MCP aberto</div>
+            <div style="font-size:11px; color:#5A564C; margin-top:4px; text-decoration:underline;">Ver detalhes →</div>
           </div>
           <div style="padding:16px;">
             <div style="font-size:10px; color:#5A564C; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:8px;">Custo estimado</div>
@@ -180,6 +226,9 @@
                 <span style="display:inline-flex; align-items:center; gap:6px; font-size:10.5px; text-transform:uppercase; letter-spacing:0.04em; padding:4px 8px; border:1px solid {{ a.statusColor }}; color:{{ a.statusColor }}; font-weight:700;">
                   <span style="width:6px; height:6px; background:{{ a.statusColor }}; display:inline-block;"></span>{{ a.statusLabel }}
                 </span>
+                <sc-if value="{{ a.hasLiveLine }}" hint-placeholder-val="{{ false }}">
+                  <div title="{{ a.liveLine }}" style="font-size:10px; color:#5A564C; margin-top:8px; font-family:'SFMono-Regular',Consolas,monospace; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">▸ {{ a.liveLine }}</div>
+                </sc-if>
               </div>
             </div>
           </sc-for>
@@ -215,6 +264,36 @@
               </div>
             </div>
 
+            <sc-if value="{{ selectedAgent.hasLastResult }}" hint-placeholder-val="{{ false }}">
+            <div>
+              <div style="font-size:10px; text-transform:uppercase; letter-spacing:0.08em; color:#5A564C; margin-bottom:8px; border-bottom:1px solid #14140F; padding-bottom:4px;">Último resultado</div>
+              <div style="border:1.5px solid {{ selectedAgent.lastResultColor }}; background:#F6F4EC; padding:12px;">
+                <span style="font-size:10px; font-weight:800; text-transform:uppercase; letter-spacing:0.04em; color:{{ selectedAgent.lastResultColor }};">{{ selectedAgent.lastResultStatusLabel }}</span>
+                <div style="font-size:12px; margin-top:6px;">{{ selectedAgent.lastResultSummary }}</div>
+                <sc-if value="{{ selectedAgent.hasLastResultFiles }}" hint-placeholder-val="{{ false }}">
+                  <div style="font-size:10.5px; color:#5A564C; margin-top:8px; font-family:'SFMono-Regular',Consolas,monospace;">Arquivos: {{ selectedAgent.lastResultFiles }}</div>
+                </sc-if>
+                <sc-if value="{{ selectedAgent.hasLastResultErrors }}" hint-placeholder-val="{{ false }}">
+                  <div style="font-size:10.5px; color:#D6553F; margin-top:8px;">{{ selectedAgent.lastResultErrors }}</div>
+                </sc-if>
+              </div>
+            </div>
+            </sc-if>
+
+            <sc-if value="{{ selectedAgent.hasLiveFeed }}" hint-placeholder-val="{{ false }}">
+            <div>
+              <div style="font-size:10px; text-transform:uppercase; letter-spacing:0.08em; color:#5A564C; margin-bottom:8px; border-bottom:1px solid #14140F; padding-bottom:4px;">Atividade ao vivo</div>
+              <div style="display:flex; flex-direction:column; gap:4px; max-height:220px; overflow-y:auto;">
+                <sc-for list="{{ selectedAgent.liveFeed }}" as="ln" hint-placeholder-count="3">
+                  <div style="display:flex; gap:8px; padding:5px 7px; background:#F6F4EC; border:1px solid #DEDACD; font-family:'SFMono-Regular',Consolas,monospace; font-size:10.5px;">
+                    <span style="color:#5A564C; white-space:nowrap;">{{ ln.time }}</span>
+                    <span style="word-break:break-word;">{{ ln.text }}</span>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+            </sc-if>
+
             <div>
               <div style="font-size:10px; text-transform:uppercase; letter-spacing:0.08em; color:#5A564C; margin-bottom:8px; border-bottom:1px solid #14140F; padding-bottom:4px;">MCPs conectados</div>
               <div style="display:flex; gap:6px; flex-wrap:wrap;">
@@ -223,6 +302,49 @@
                 </sc-for>
               </div>
             </div>
+
+            <div>
+              <div style="font-size:10px; text-transform:uppercase; letter-spacing:0.08em; color:#5A564C; margin-bottom:8px; border-bottom:1px solid #14140F; padding-bottom:4px;">Skills instaladas (npx skills)</div>
+              <sc-if value="{{ selectedAgent.skillsLoading }}" hint-placeholder-val="{{ false }}">
+                <div style="font-size:11px; color:#5A564C; font-style:italic; margin-bottom:10px;">Carregando suas skills...</div>
+              </sc-if>
+              <sc-if value="{{ selectedAgent.hasSkills }}" hint-placeholder-val="{{ false }}">
+                <div style="display:flex; gap:6px; flex-wrap:wrap; margin-bottom:10px;">
+                  <sc-for list="{{ selectedAgent.skillsList }}" as="sk" hint-placeholder-count="1">
+                    <span title="{{ sk.source }}" style="display:inline-flex; align-items:center; gap:6px; font-size:10.5px; padding:5px 6px 5px 9px; border:1px solid #2FA98C; color:#2FA98C; text-transform:uppercase; letter-spacing:0.02em;">
+                      {{ sk.name }}
+                      <button onClick="{{ sk.onRemove }}" title="Remover skill" style="background:none; border:none; color:#2FA98C; cursor:pointer; font-size:12px; line-height:1; padding:0;">×</button>
+                    </span>
+                  </sc-for>
+                </div>
+              </sc-if>
+              <sc-if value="{{ selectedAgent.noSkillsYet }}" hint-placeholder-val="{{ false }}">
+                <div style="font-size:11px; color:#5A564C; font-style:italic; margin-bottom:10px;">Não há skills para esse agente.</div>
+              </sc-if>
+              <sc-if value="{{ selectedAgent.hasSkillsError }}" hint-placeholder-val="{{ false }}">
+                <div style="font-size:10.5px; color:#D6553F; margin-bottom:10px;">{{ selectedAgent.skillsError }}</div>
+              </sc-if>
+              <button onClick="{{ selectedAgent.onOpenSkillModal }}" style="font-size:10.5px; font-weight:700; text-transform:uppercase; letter-spacing:0.04em; padding:9px 12px; border:1px solid #14140F; background:#fff; color:#14140F; cursor:pointer;">+ Instalar nova skill</button>
+            </div>
+
+            <sc-if value="{{ selectedAgent.skillModalOpen }}" hint-placeholder-val="{{ false }}">
+              <div onClick="{{ selectedAgent.onCloseSkillModal }}" style="position:fixed; inset:0; background:rgba(20,20,15,0.55); z-index:60;"></div>
+              <div style="position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); width:360px; max-width:90vw; background:#EDEAE1; border:2px solid #14140F; z-index:61; padding:22px;">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+                  <span style="font-size:13px; font-weight:800; text-transform:uppercase; letter-spacing:0.04em;">Instalar skill</span>
+                  <button onClick="{{ selectedAgent.onCloseSkillModal }}" style="background:none; border:1px solid #14140F; width:26px; height:26px; cursor:pointer; font-size:13px;">×</button>
+                </div>
+                <div style="display:flex; flex-direction:column; gap:12px;">
+                  <label style="display:block; font-size:10px; text-transform:uppercase; letter-spacing:0.04em; color:#5A564C;">Repositório
+                    <input id="skill-package-{{ selectedAgent.projectId }}" type="text" placeholder="ex: anthropics/skills" style="display:block; width:100%; margin-top:5px; font-size:12px; padding:9px 10px; border:1px solid #14140F; background:#fff; font-family:inherit; box-sizing:border-box;" />
+                  </label>
+                  <label style="display:block; font-size:10px; text-transform:uppercase; letter-spacing:0.04em; color:#5A564C;">Nome da skill (opcional)
+                    <input id="skill-name-{{ selectedAgent.projectId }}" type="text" placeholder="ex: frontend-design" style="display:block; width:100%; margin-top:5px; font-size:12px; padding:9px 10px; border:1px solid #14140F; background:#fff; font-family:inherit; box-sizing:border-box;" />
+                  </label>
+                  <button onClick="{{ selectedAgent.onInstallSkill }}" style="margin-top:4px; font-size:10.5px; font-weight:700; text-transform:uppercase; letter-spacing:0.04em; padding:10px; border:1px solid #14140F; background:#14140F; color:#fff; cursor:pointer;">{{ selectedAgent.installLabel }}</button>
+                </div>
+              </div>
+            </sc-if>
 
             <div>
               <div style="font-size:10px; text-transform:uppercase; letter-spacing:0.08em; color:#5A564C; margin-bottom:8px; border-bottom:1px solid #14140F; padding-bottom:4px;">Últimas execuções</div>
@@ -363,10 +485,10 @@
         </div>
 
         <div style="display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:0; border:1.5px solid #14140F; margin-bottom:22px;">
-          <div style="padding:16px; border-right:1.5px solid #14140F;"><div style="font-size:10px; color:#5A564C; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:6px;">Tokens entrada</div><div style="font-size:20px; font-weight:800;">32.326</div></div>
-          <div style="padding:16px; border-right:1.5px solid #14140F;"><div style="font-size:10px; color:#5A564C; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:6px;">Tokens saída</div><div style="font-size:20px; font-weight:800;">160</div></div>
-          <div style="padding:16px; border-right:1.5px solid #14140F;"><div style="font-size:10px; color:#5A564C; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:6px;">Custo estimado</div><div style="font-size:20px; font-weight:800;">US$0,059</div></div>
-          <div style="padding:16px;"><div style="font-size:10px; color:#5A564C; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:6px;">Custo registrado</div><div style="font-size:20px; font-weight:800; color:#E3A93B;">US$0,00</div></div>
+          <div style="padding:16px; border-right:1.5px solid #14140F;"><div style="font-size:10px; color:#5A564C; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:6px;">Tokens entrada</div><div style="font-size:20px; font-weight:800;">{{ costsTokensInput }}</div></div>
+          <div style="padding:16px; border-right:1.5px solid #14140F;"><div style="font-size:10px; color:#5A564C; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:6px;">Tokens saída</div><div style="font-size:20px; font-weight:800;">{{ costsTokensOutput }}</div></div>
+          <div style="padding:16px; border-right:1.5px solid #14140F;"><div style="font-size:10px; color:#5A564C; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:6px;">Custo estimado</div><div style="font-size:20px; font-weight:800;">US${{ estimatedCost }}</div></div>
+          <div style="padding:16px;"><div style="font-size:10px; color:#5A564C; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:6px;">Custo registrado</div><div style="font-size:20px; font-weight:800; color:#E3A93B;">US${{ recordedCost }}</div></div>
         </div>
 
         <div style="display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:16px;">
@@ -381,19 +503,18 @@
                   </div>
                 </sc-if>
               </sc-for>
-              <div style="font-size:10.5px; color:#5A564C; margin-top:6px;">Contracts, QA, Security e Reviewer ainda não têm execuções individuais registradas.</div>
             </div>
           </div>
 
           <div style="border:1.5px solid #14140F;">
             <div style="background:#14140F; color:#fff; padding:8px 16px; font-size:11px; letter-spacing:0.06em; text-transform:uppercase; font-weight:700;">Orçamento diário</div>
             <div style="padding:18px;">
-              <div style="font-size:11px; color:#5A564C; margin-bottom:8px;">US$0,059 usados de US$5,00 (limite sugerido)</div>
-              <div style="height:8px; background:#DEDACD; margin-bottom:16px;"><div style="height:8px; background:#35C7B9; width:1.2%;"></div></div>
+              <div style="font-size:11px; color:#5A564C; margin-bottom:8px;">US${{ estimatedCost }} usados de US${{ dailyBudgetLimit }} (limite sugerido; sem rastreio diário real no backend ainda)</div>
+              <div style="height:8px; background:#DEDACD; margin-bottom:16px;"><div style="height:8px; background:#35C7B9; width:{{ budgetPct }}%;"></div></div>
               <div style="display:flex; flex-direction:column; gap:8px;">
-                <div style="display:flex; align-items:center; gap:8px; font-size:11px; color:#5A564C;"><span style="width:7px; height:7px; background:#2FA98C;"></span> ALERTA EM 50% — NÃO ATINGIDO</div>
-                <div style="display:flex; align-items:center; gap:8px; font-size:11px; color:#5A564C;"><span style="width:7px; height:7px; background:#E3A93B;"></span> ALERTA EM 80% — NÃO ATINGIDO</div>
-                <div style="display:flex; align-items:center; gap:8px; font-size:11px; color:#5A564C;"><span style="width:7px; height:7px; background:#D6553F;"></span> ALERTA EM 100% — NÃO ATINGIDO</div>
+                <div style="display:flex; align-items:center; gap:8px; font-size:11px; color:#5A564C;"><span style="width:7px; height:7px; background:{{ budgetAlertColor50 }};"></span> ALERTA EM 50% — {{ budgetAlert50 }}</div>
+                <div style="display:flex; align-items:center; gap:8px; font-size:11px; color:#5A564C;"><span style="width:7px; height:7px; background:{{ budgetAlertColor80 }};"></span> ALERTA EM 80% — {{ budgetAlert80 }}</div>
+                <div style="display:flex; align-items:center; gap:8px; font-size:11px; color:#5A564C;"><span style="width:7px; height:7px; background:{{ budgetAlertColor100 }};"></span> ALERTA EM 100% — {{ budgetAlert100 }}</div>
               </div>
             </div>
           </div>
@@ -417,7 +538,12 @@
                 <span style="font-size:15px; font-weight:800; color:{{ a.healthColor }};">{{ a.healthScore }}</span>
               </div>
               <div style="height:6px; background:#DEDACD; margin-bottom:6px;"><div style="height:6px; background:{{ a.healthColor }}; width:{{ a.healthScore }}%;"></div></div>
-              <div style="font-size:10.5px; color:#5A564C; text-transform:uppercase;">{{ a.healthLabel }}</div>
+              <div style="font-size:10.5px; color:#5A564C; text-transform:uppercase; margin-bottom:6px;">{{ a.healthLabel }}</div>
+              <sc-if value="{{ a.hasHealthReasons }}" hint-placeholder-val="{{ false }}">
+                <sc-for list="{{ a.healthReasonsList }}" as="r" hint-placeholder-count="1">
+                  <div style="font-size:10px; color:#5A564C; line-height:1.4;">▸ {{ r.text }}</div>
+                </sc-for>
+              </sc-if>
             </div>
           </sc-for>
         </div>
@@ -426,7 +552,7 @@
           <div style="background:#14140F; color:#fff; padding:8px 16px; font-size:11px; letter-spacing:0.06em; text-transform:uppercase; font-weight:700;">Incidentes</div>
           <div style="padding:6px 18px;">
             <sc-for list="{{ incidents }}" as="inc" hint-placeholder-count="2">
-              <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:14px; padding:13px 0; border-bottom:1px solid #14140F;">
+              <div onClick="{{ inc.onOpen }}" style="display:flex; align-items:flex-start; justify-content:space-between; gap:14px; padding:13px 0; border-bottom:1px solid #14140F; cursor:pointer;">
                 <div>
                   <div style="display:flex; align-items:center; gap:8px; margin-bottom:3px;">
                     <span style="font-size:10px; font-weight:700; text-transform:uppercase; padding:3px 7px; border:1px solid {{ inc.color }}; color:{{ inc.color }};">{{ inc.severity }}</span>
@@ -437,6 +563,9 @@
                 <div style="font-size:10.5px; color:#5A564C; white-space:nowrap; text-transform:uppercase;">{{ inc.status }}</div>
               </div>
             </sc-for>
+            <sc-if value="{{ noIncidents }}" hint-placeholder-val="{{ false }}">
+              <div style="font-size:12px; color:#5A564C; padding:13px 0;">Nenhum incidente de segurança ou contrato registrado.</div>
+            </sc-if>
           </div>
         </div>
       </div>
@@ -548,11 +677,43 @@ class Component extends DCLogic {
   static FLOW_STAGES = ["Análise", "Descoberta", "Plano", "Agentes paralelos", "Contratos", "Testes", "Segurança", "Review", "Commit -> Merge -> Deploy"];
 
   static COLOR = { success: "#2FA98C", danger: "#D6553F", warning: "#E3A93B", idle: "#9B9689", teal: "#35C7B9" };
+  static AGENT_PROJECT_ID = { frontend: "frontend", backend: "backend", python_ai: "python", contracts: "backend", qa: "backend", security: "backend", reviewer: "backend" };
+  static REASON_LABELS = {
+    "estimated context tokens exceed critical threshold": "Tokens de contexto estimados acima do limite crítico",
+    "estimated context tokens exceed warning threshold": "Tokens de contexto estimados acima do limite de aviso",
+    "three or more errors recorded": "Três ou mais erros registrados",
+    "retry budget is exhausted": "Orçamento de retries esgotado",
+    "repeated information detected": "Informação repetida detectada",
+  };
+
+  // Thresholds mirror the backend defaults (CONTEXT_TOKEN_WARNING / CONTEXT_TOKEN_CRITICAL in
+  // orchestrator/config.py) — /dashboard-data does not expose the configured values, so a
+  // deployment that overrides those env vars will make this drift from the real thresholds.
+  static computeAgentHealth(contextHealth) {
+    const ch = contextHealth || {};
+    if (Object.keys(ch).length === 0) return { score: 100, reasons: [] };
+    let score = 100;
+    const tokens = ch.estimated_tokens || 0;
+    if (tokens >= 60000) score -= 40;
+    else if (tokens >= 24000) score -= 20;
+    score -= Math.min(30, (ch.retries || 0) * 10);
+    score -= Math.min(30, (ch.contract_conflicts || 0) * 15);
+    score -= Math.min(30, (ch.consecutive_errors || 0) * 15);
+    if (ch.compacted) score -= 10;
+    return { score: Math.max(0, Math.min(100, Math.round(score))), reasons: ch.reasons || [] };
+  }
 
   state = {
     view: "dashboard",
     selectedAgentKey: null,
     selectedExecutionId: null,
+    projectSkills: {},
+    skillsLoading: {},
+    skillBusy: false,
+    skillModalProject: null,
+    removeConfirm: null,
+    toastKind: "info",
+    failuresPanelOpen: false,
     mcpIncidentOpen: true,
     mcps: Component.MCP_DEFS.map(function (m) { return Object.assign({}, m); }),
     execFilter: "all",
@@ -561,6 +722,7 @@ class Component extends DCLogic {
     toast: null,
     liveData: null,
     liveAgents: {},
+    agentActivity: {},
   };
 
   componentDidMount() {
@@ -574,9 +736,39 @@ class Component extends DCLogic {
         this.setState((s) => ({ liveAgents: Object.assign({}, s.liveAgents, {
           [event.agent]: { statusKey: running ? "running" : (event.status === "failed" || event.status === "blocked" ? "attention" : "idle") }
         }) }));
+        if (event.type === "agent.started") {
+          // Clear stale activity from a previous run of this agent before the new one starts logging.
+          this.setState((s) => ({ agentActivity: Object.assign({}, s.agentActivity, { [event.agent]: { feed: [], lastLine: null, lastResult: null } }) }));
+        } else if (event.result) {
+          this.setState((s) => {
+            const previous = s.agentActivity[event.agent] || { feed: [] };
+            return { agentActivity: Object.assign({}, s.agentActivity, { [event.agent]: Object.assign({}, previous, {
+              lastResult: {
+                status: event.status, summary: event.result.summary || "",
+                filesChanged: event.result.files_changed || [], errors: event.result.errors || [],
+              },
+            }) }) };
+          });
+        }
         this.pushLog((running ? "Agente iniciado: " : "Agente finalizado: ") + event.agent + " [" + event.status + "]");
+      } else if (event.type === "agent.stream") {
+        const raw = (event.raw || "").trim();
+        if (raw) {
+          const time = new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+          this.setState((s) => {
+            const previous = s.agentActivity[event.agent] || { feed: [] };
+            const feed = [{ time: time, text: raw }].concat(previous.feed).slice(0, 30);
+            return { agentActivity: Object.assign({}, s.agentActivity, { [event.agent]: Object.assign({}, previous, { feed: feed, lastLine: raw }) }) };
+          });
+        }
       } else if (event.type === "state.updated") {
-        this.pushLog("LangGraph: " + event.node + " [" + event.status + "]");
+        if (event.event === "execution.completed") {
+          const label = event.status === "completed" ? "concluída" : event.status === "cancelled" ? "cancelada" : "falhou";
+          this.showToast("Execução " + event.execution_id.slice(0, 8) + " " + label + ".");
+          this.pushLog("Execução finalizada [" + event.status + "]: " + event.execution_id);
+        } else {
+          this.pushLog("LangGraph: " + event.node + " [" + event.status + "]");
+        }
       }
       this.refreshDashboard();
     });
@@ -593,21 +785,46 @@ class Component extends DCLogic {
       .then((response) => response.ok ? response.json() : Promise.reject(new Error("dashboard-data unavailable")))
       .then((data) => {
         const metrics = Object.fromEntries(data.agents.map((item) => [item.agent, item]));
+        // "attention" must reflect the agent's most recent run, not whether it has ever
+        // failed historically — otherwise one old failure marks it "awaiting review"
+        // forever, even after later runs succeeded or it has been idle since.
+        // data.items is already sorted newest-first, so the first task hit per agent is the latest.
+        const latestStatusByAgent = {};
+        // context_health is per execution (the orchestrator's own state), not truly per agent —
+        // this takes the health of the most recent execution each agent participated in as an
+        // approximation, which is still real backend data (tokens/retries/conflicts/compaction),
+        // unlike the old "100 - failures*22" formula it replaces.
+        const latestContextHealthByAgent = {};
+        (data.items || []).forEach(function (item) {
+          (item.tasks || []).forEach(function (t) {
+            if (!(t.agent in latestStatusByAgent)) {
+              latestStatusByAgent[t.agent] = t.status;
+              latestContextHealthByAgent[t.agent] = item.context_health || {};
+            }
+          });
+        });
         const agents = Component.AGENT_DEFS.map((agent) => {
           const metric = metrics[agent.key];
+          const latestStatus = latestStatusByAgent[agent.key];
+          const statusKey = (latestStatus === "failed" || latestStatus === "blocked") ? "attention" : "idle";
+          const health = Component.computeAgentHealth(latestContextHealthByAgent[agent.key]);
           if (!metric) return Object.assign({}, agent, {
             execCount: 0,
             success: 0,
             fail: 0,
             totalMin: 0,
-            statusKey: "idle",
+            statusKey: statusKey,
+            healthScore: health.score,
+            healthReasons: health.reasons,
           });
           return Object.assign({}, agent, {
             execCount: metric.runs,
             success: metric.completed,
             fail: metric.failed,
             totalMin: Math.max(0, Math.round(metric.duration_seconds / 60)),
-            statusKey: metric.failed ? "attention" : "idle",
+            statusKey: statusKey,
+            healthScore: health.score,
+            healthReasons: health.reasons,
           });
         });
         const executions = data.items.map((item, index) => ({
@@ -619,7 +836,12 @@ class Component extends DCLogic {
           duration: "-",
           status: item.status,
           agentKeys: item.agent_keys,
-          failReason: (item.context_health.reasons || []).join("; ") || "Execução não concluída.",
+          tasks: item.tasks || [],
+          errors: item.errors || [],
+          securityFindings: item.security_findings || [],
+          contractFindings: item.contract_findings || [],
+          updatedAtRaw: item.updated_at,
+          failReason: (item.errors || []).join("; ") || (item.context_health.reasons || []).join("; ") || "Execução não concluída.",
         }));
         const activeAgents = Object.fromEntries((data.active_agents || []).map((item) => [item.agent, { statusKey: "running" }]));
         this.setState((s) => ({
@@ -627,13 +849,13 @@ class Component extends DCLogic {
           liveAgents: activeAgents,
         }));
       })
-      .catch(() => this.showToast("Dados reais indisponíveis; exibindo último snapshot."));
+      .catch(() => this.showToast("Dados reais indisponíveis; exibindo último snapshot.", 2600, "error"));
   }
 
-  showToast(text) {
-    this.setState({ toast: text });
+  showToast(text, durationMs, kind) {
+    this.setState({ toast: text, toastKind: kind || "info" });
     if (this._toastTimer) clearTimeout(this._toastTimer);
-    this._toastTimer = setTimeout(() => this.setState({ toast: null }), 2600);
+    this._toastTimer = setTimeout(() => this.setState({ toast: null }), durationMs || 2600);
   }
 
   pushLog(text) {
@@ -642,6 +864,105 @@ class Component extends DCLogic {
       const next = [{ time: time, text: text }].concat(s.auditLog).slice(0, 20);
       return { auditLog: next };
     });
+  }
+
+  loadSkills(projectId) {
+    if (!projectId) return;
+    this.setState((s) => ({ skillsLoading: Object.assign({}, s.skillsLoading, { [projectId]: true }) }));
+    fetch("/projects/" + projectId + "/skills")
+      .then((r) => r.json())
+      .then((data) => {
+        this.setState((s) => ({
+          projectSkills: Object.assign({}, s.projectSkills, { [projectId]: data }),
+          skillsLoading: Object.assign({}, s.skillsLoading, { [projectId]: false }),
+        }));
+      })
+      .catch(() => {
+        this.setState((s) => ({ skillsLoading: Object.assign({}, s.skillsLoading, { [projectId]: false }) }));
+        this.showToast("Não foi possível carregar as skills deste projeto.", 6000, "error");
+      });
+  }
+
+  openFailuresPanel() {
+    this.setState({ failuresPanelOpen: true });
+  }
+
+  closeFailuresPanel() {
+    this.setState({ failuresPanelOpen: false });
+  }
+
+  openSkillModal(projectId) {
+    this.setState({ skillModalProject: projectId });
+  }
+
+  closeSkillModal() {
+    this.setState({ skillModalProject: null });
+  }
+
+  installSkill(projectId) {
+    const self = this;
+    const packageInput = document.getElementById("skill-package-" + projectId);
+    const skillInput = document.getElementById("skill-name-" + projectId);
+    let pkg = packageInput ? packageInput.value.trim() : "";
+    let skillName = skillInput ? skillInput.value.trim() : "";
+    // Tolerate someone pasting the full "repo --skill name" CLI example into the repo field.
+    const pastedFlag = pkg.match(/\s+--skill(?:=|\s+)(\S+)/);
+    if (pastedFlag) {
+      pkg = pkg.slice(0, pastedFlag.index).trim();
+      if (!skillName) skillName = pastedFlag[1];
+    }
+    if (!pkg) { this.showToast("Informe o pacote/repositório da skill (ex: anthropics/skills)."); return; }
+    this.setState({ skillBusy: true });
+    fetch("/projects/" + projectId + "/skills", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ package: pkg, skill: skillName || null }),
+    })
+      .then((r) => r.json())
+      .then(function (result) {
+        self.setState({ skillBusy: false });
+        if (result.ok) {
+          self.showToast("Skill instalada em " + projectId + ".", 6000, "success");
+          self.closeSkillModal();
+          if (packageInput) packageInput.value = "";
+          if (skillInput) skillInput.value = "";
+        } else {
+          self.showToast("Falha ao instalar skill: " + (result.error || "erro desconhecido"), 8000, "error");
+        }
+        self.pushLog((result.ok ? "Skill instalada [" : "Falha ao instalar skill [") + projectId + "]: " + pkg + (skillName ? " (" + skillName + ")" : ""));
+        self.loadSkills(projectId);
+      })
+      .catch(function () {
+        self.setState({ skillBusy: false });
+        self.showToast("Falha ao instalar skill.", 8000, "error");
+      });
+  }
+
+  confirmRemoveSkill(projectId, skillName) {
+    this.setState({ removeConfirm: { projectId: projectId, skillName: skillName } });
+  }
+
+  cancelRemoveSkill() {
+    this.setState({ removeConfirm: null });
+  }
+
+  removeSkill(projectId, skillName) {
+    const self = this;
+    this.setState({ skillBusy: true, removeConfirm: null });
+    fetch("/projects/" + projectId + "/skills/" + encodeURIComponent(skillName), { method: "DELETE" })
+      .then((r) => r.json())
+      .then(function (result) {
+        self.setState({ skillBusy: false });
+        self.showToast(
+          result.ok ? "Skill \"" + skillName + "\" removida." : "Falha ao remover skill: " + (result.error || "erro desconhecido"),
+          result.ok ? 6000 : 8000, result.ok ? "success" : "error"
+        );
+        self.pushLog((result.ok ? "Skill removida [" : "Falha ao remover skill [") + projectId + "]: " + skillName);
+        self.loadSkills(projectId);
+      })
+      .catch(function () {
+        self.setState({ skillBusy: false });
+        self.showToast("Falha ao remover skill.", 8000, "error");
+      });
   }
 
   buildAgents() {
@@ -653,7 +974,11 @@ class Component extends DCLogic {
     const liveAgents = this.state.liveAgents;
     return agentDefs.map(function (a) {
       const successRate = a.execCount ? Math.round((a.success / a.execCount) * 100) + "%" : "-";
-      const healthScore = a.execCount === 0 ? 100 : Math.max(55, 100 - a.fail * 22);
+      // Real backend context health (tokens/retries/conflicts/compaction) from the agent's most
+      // recent execution — see Component.computeAgentHealth. Falls back to 100 only for the
+      // static pre-load placeholder (Component.AGENT_DEFS), which carries no real health data.
+      const healthScore = typeof a.healthScore === "number" ? a.healthScore : 100;
+      const healthReasons = a.healthReasons || [];
       const healthColor = healthScore >= 85 ? COLOR.success : healthScore >= 65 ? COLOR.warning : COLOR.danger;
       const healthLabel = healthScore >= 85 ? "Saudável" : healthScore >= 65 ? "Atenção" : "Crítico";
       const statusMap = {
@@ -663,6 +988,7 @@ class Component extends DCLogic {
       };
       const live = liveAgents[a.key];
       const st = statusMap[(live && live.statusKey) || a.statusKey] || statusMap.idle;
+      const activity = self.state.agentActivity[a.key];
       const costPct = totalMin ? Math.round((a.totalMin / totalMin) * 100) : 0;
       const runs = executionDefs.filter(function (e) { return e.agentKeys.indexOf(a.key) !== -1; }).map(function (e) {
         return {
@@ -672,12 +998,47 @@ class Component extends DCLogic {
           onOpen: function () { self.setState({ view: "executions", selectedAgentKey: null, selectedExecutionId: e.id }); },
         };
       });
+      const lastResult = activity && activity.lastResult;
+      const lastResultColor = lastResult ? (lastResult.status === "completed" ? COLOR.success : lastResult.status === "failed" || lastResult.status === "blocked" ? COLOR.danger : COLOR.idle) : COLOR.idle;
+      const lastResultStatusLabel = lastResult ? (lastResult.status === "completed" ? "Concluído" : lastResult.status === "failed" ? "Falhou" : lastResult.status === "blocked" ? "Bloqueado" : lastResult.status) : "";
+      const pid = Component.AGENT_PROJECT_ID[a.key] || "";
+      const skillsData = self.state.projectSkills[pid];
       return Object.assign({}, a, {
         successRate: successRate, totalMin: a.totalMin + " min", healthScore: healthScore, healthColor: healthColor, healthLabel: healthLabel,
+        healthReasonsList: healthReasons.map(function (r, i) { return { key: a.key + "-reason-" + i, text: Component.REASON_LABELS[r] || r }; }),
+        hasHealthReasons: healthReasons.length > 0,
         statusLabel: st.label, statusColor: st.color,
         costPct: costPct, costShare: a.execCount ? (a.totalMin + " min") : "sem custo",
         runs: runs,
-        onSelect: function () { self.setState({ selectedAgentKey: a.key }); },
+        liveLine: activity ? activity.lastLine : null,
+        hasLiveLine: !!(activity && activity.lastLine),
+        liveFeed: activity ? activity.feed : [],
+        hasLiveFeed: !!(activity && activity.feed && activity.feed.length),
+        hasLastResult: !!lastResult,
+        lastResultStatusLabel: lastResultStatusLabel,
+        lastResultColor: lastResultColor,
+        lastResultSummary: lastResult ? lastResult.summary : "",
+        lastResultFiles: lastResult && lastResult.filesChanged.length ? lastResult.filesChanged.join(", ") : "",
+        hasLastResultFiles: !!(lastResult && lastResult.filesChanged.length),
+        lastResultErrors: lastResult && lastResult.errors.length ? lastResult.errors.join("; ") : "",
+        hasLastResultErrors: !!(lastResult && lastResult.errors.length),
+        projectId: pid,
+        skillsList: (skillsData && skillsData.skills ? skillsData.skills : []).map(function (s) {
+          return { name: s.name, source: s.source || "", onRemove: function () { self.confirmRemoveSkill(pid, s.name); } };
+        }),
+        hasSkills: !!(skillsData && skillsData.skills && skillsData.skills.length),
+        skillsLoading: !!self.state.skillsLoading[pid],
+        skillsLoaded: !!skillsData,
+        noSkillsYet: !!skillsData && !self.state.skillsLoading[pid] && !(skillsData.skills || []).length && !skillsData.error,
+        skillsError: skillsData ? skillsData.error : null,
+        hasSkillsError: !!(skillsData && skillsData.error),
+        skillBusy: self.state.skillBusy,
+        installLabel: self.state.skillBusy ? "Instalando..." : "Instalar",
+        skillModalOpen: self.state.skillModalProject === pid,
+        onOpenSkillModal: function () { self.openSkillModal(pid); },
+        onCloseSkillModal: function () { self.closeSkillModal(); },
+        onInstallSkill: function () { self.installSkill(pid); },
+        onSelect: function () { self.setState({ selectedAgentKey: a.key }); self.loadSkills(pid); },
       });
     });
   }
@@ -688,21 +1049,35 @@ class Component extends DCLogic {
     const agentByKey = {};
     agents.forEach(function (a) { agentByKey[a.key] = a; });
     const executionDefs = this.state.liveData ? this.state.liveData.executions : Component.EXECUTION_DEFS;
+    const taskDotColor = function (status) {
+      if (status === "completed") return COLOR.success;
+      if (status === "failed" || status === "blocked") return COLOR.danger;
+      if (status === "running") return COLOR.teal;
+      return COLOR.idle;
+    };
     return executionDefs.map(function (e) {
       const completed = e.status === "completed";
       const timeline = [
         { label: "Solicitação", detail: e.feature, dotColor: COLOR.success },
         { label: "Descoberta", detail: "Alvo resolvido: " + e.project, dotColor: COLOR.success },
         { label: "Plano", detail: "Plano gerado pelo supervisor com dependências mapeadas.", dotColor: COLOR.success },
-        { label: "Agentes paralelos", detail: e.agentKeys.map(function (k) { return agentByKey[k] ? agentByKey[k].label : k; }).join(", "), dotColor: completed ? COLOR.success : COLOR.danger },
       ];
-      if (completed) {
-        timeline.push(
-          { label: "Contratos, testes e segurança", detail: "Gates passaram sem bloqueios.", dotColor: COLOR.success },
-          { label: "Review e commit", detail: "Aprovado por Code Reviewer; commit local criado.", dotColor: COLOR.success },
-          { label: "Merge / Deploy", detail: "Merge concluído. Deploy de produção bloqueado (ALLOW_PRODUCTION_DEPLOY=false).", dotColor: COLOR.success }
-        );
+      if (e.tasks && e.tasks.length) {
+        e.tasks.forEach(function (t) {
+          const agentLabel = agentByKey[t.agent] ? agentByKey[t.agent].label : t.agent;
+          // dispatch_agents only checkpoints once every parallel agent in the batch finishes, so
+          // a task can sit at "pending" with no summary for a long time while genuinely still
+          // running — "sem retorno" reads as broken/dead, when it may just mean "not done yet".
+          const stillInFlight = e.status === "running" && (t.status === "pending" || t.status === "running");
+          const detail = t.summary
+            || (t.errors && t.errors.length ? t.errors.join("; ") : null)
+            || (stillInFlight ? "Em execução — acompanhe ao vivo no card do agente em Manage Agents." : "Sem retorno registrado para esta task.");
+          timeline.push({ label: agentLabel, detail: detail, dotColor: stillInFlight ? COLOR.teal : taskDotColor(t.status) });
+        });
       } else {
+        timeline.push({ label: "Agentes paralelos", detail: e.agentKeys.map(function (k) { return agentByKey[k] ? agentByKey[k].label : k; }).join(", "), dotColor: completed ? COLOR.success : COLOR.danger });
+      }
+      if (!completed && e.status !== "running") {
         timeline.push({ label: "Falha", detail: e.failReason, dotColor: COLOR.danger });
       }
       return Object.assign({}, e, {
@@ -764,10 +1139,30 @@ class Component extends DCLogic {
       });
     });
 
-    const incidents = [
-      { title: "MCP Design: autenticação expirada", detail: "[EXEC-5] falhou ao publicar cards de campanha - worker MCP exigiu OAuth do Anthropic Design.", severity: "Crítico", color: COLOR.danger, status: this.state.mcpIncidentOpen ? "Aberto" : "Resolvido" },
-      { title: "Conflito de contrato entre Backend e Workflow-IA", detail: "[EXEC-6] falhou na etapa de validação de contratos - schemas divergentes entre projetos.", severity: "Atenção", color: COLOR.warning, status: "Aberto" },
-    ];
+    // Real incidents: blocking security/contract findings pulled straight from the executions
+    // that actually produced them — nothing here is invented (unlike the old fixed EXEC-5/EXEC-6
+    // demo entries this replaces).
+    const incidents = [];
+    executions.forEach((execution) => {
+      (execution.securityFindings || []).forEach((finding, index) => {
+        incidents.push({
+          key: execution.id + "-sec-" + index,
+          title: "Segurança: " + (finding.path || "arquivo não identificado"),
+          detail: "[" + execution.tag + "] " + finding.message,
+          severity: "Crítico", color: COLOR.danger, status: execution.statusLabel,
+          onOpen: () => this.setState({ view: "executions", selectedExecutionId: execution.id }),
+        });
+      });
+      (execution.contractFindings || []).forEach((finding, index) => {
+        incidents.push({
+          key: execution.id + "-contract-" + index,
+          title: "Contrato: " + (finding.resource || "recurso não identificado"),
+          detail: "[" + execution.tag + "] " + finding.message,
+          severity: "Atenção", color: COLOR.warning, status: execution.statusLabel,
+          onOpen: () => this.setState({ view: "executions", selectedExecutionId: execution.id }),
+        });
+      });
+    });
 
     const projects = [
       { name: "bezalel-app", alias: "../bezalel-app", stack: "React / Vite", role: "Frontend", worktree: "main (sem worktree isolada)", status: "Saudável" },
@@ -786,6 +1181,18 @@ class Component extends DCLogic {
         }))
       : [];
 
+    const failuresList = (this.state.liveData ? this.state.liveData.executions : [])
+      .filter((execution) => execution.status === "failed")
+      .map((execution) => {
+        const when = execution.updatedAtRaw ? new Date(execution.updatedAtRaw).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "medium" }) : "Data não registrada";
+        const reasons = execution.errors && execution.errors.length ? execution.errors : ["Motivo não registrado."];
+        return {
+          id: execution.id, tag: execution.tag, feature: execution.feature, project: execution.project, when: when,
+          reasons: reasons.map((text, index) => ({ key: execution.id + "-" + index, text: text })),
+          onOpen: () => this.setState({ view: "executions", selectedExecutionId: execution.id, failuresPanelOpen: false }),
+        };
+      });
+
     const switchStyle = (on) => ({ width: 40, height: 20, border: "1.5px solid #14140F", background: on ? "#35C7B9" : "#fff", position: "relative", cursor: "pointer", padding: 0, flexShrink: 0 });
     const knobStyle = (on) => ({ position: "absolute", top: 1, left: on ? 20 : 1, width: 16, height: 16, background: "#14140F" });
 
@@ -799,7 +1206,13 @@ class Component extends DCLogic {
     ];
 
     const summary = this.state.liveData ? this.state.liveData.summary : { total: 6, completed: 4, failed: 2, running: 0 };
-    const usage = this.state.liveData ? this.state.liveData.usage : { estimated_cost_usd: 0.059, recorded_cost_usd: 0 };
+    const usage = this.state.liveData ? this.state.liveData.usage : { tokens_input: 0, tokens_output: 0, estimated_cost_usd: 0.059, recorded_cost_usd: 0 };
+    // No daily-spend tracking exists on the backend (agent_metrics() is cumulative, all-time) —
+    // this is a static suggested ceiling to render a proportion against, not a real "today" cap.
+    const dailyBudgetLimit = 5.0;
+    const budgetPct = Math.min(100, (Number(usage.estimated_cost_usd) / dailyBudgetLimit) * 100);
+    const budgetAlert = (threshold) => budgetPct >= threshold ? "ATINGIDO" : "NÃO ATINGIDO";
+    const budgetAlertColor = (threshold) => budgetPct >= threshold ? "#D6553F" : "#2FA98C";
 
     return {
       isDashboard: this.state.view === "dashboard",
@@ -821,6 +1234,19 @@ class Component extends DCLogic {
         { key: "audit", label: "AUDITORIA" },
       ].map((n) => ({ label: n.label, onClick: () => this.setState({ view: n.key, selectedAgentKey: null, selectedExecutionId: null }), style: this.navBtnStyle(n.key) })),
       toast: this.state.toast,
+      toastColor: this.state.toastKind === "success" ? COLOR.success : this.state.toastKind === "error" ? COLOR.danger : COLOR.teal,
+      failuresPanelOpen: this.state.failuresPanelOpen,
+      failuresList: failuresList,
+      failuresCount: failuresList.length,
+      hasFailures: failuresList.length > 0,
+      noFailures: failuresList.length === 0,
+      onOpenFailuresPanel: () => this.openFailuresPanel(),
+      onCloseFailuresPanel: () => this.closeFailuresPanel(),
+      removeConfirmOpen: !!this.state.removeConfirm,
+      removeConfirmSkill: this.state.removeConfirm ? this.state.removeConfirm.skillName : "",
+      removeConfirmProject: this.state.removeConfirm ? this.state.removeConfirm.projectId : "",
+      onCancelRemoveSkill: () => this.cancelRemoveSkill(),
+      onConfirmRemoveSkill: () => { if (this.state.removeConfirm) this.removeSkill(this.state.removeConfirm.projectId, this.state.removeConfirm.skillName); },
       activeAgentCount: Object.keys(this.state.liveAgents).length,
       runningSummary: summary.running ? summary.running + " execução(ões) em andamento" : "Nenhuma execução em andamento",
       executionTotal: summary.total,
@@ -828,6 +1254,13 @@ class Component extends DCLogic {
       failedTotal: summary.failed,
       estimatedCost: Number(usage.estimated_cost_usd).toFixed(3).replace(".", ","),
       recordedCost: Number(usage.recorded_cost_usd).toFixed(3).replace(".", ","),
+      costsTokensInput: Number(usage.tokens_input || 0).toLocaleString("pt-BR"),
+      costsTokensOutput: Number(usage.tokens_output || 0).toLocaleString("pt-BR"),
+      dailyBudgetLimit: dailyBudgetLimit.toFixed(2).replace(".", ","),
+      budgetPct: budgetPct.toFixed(1).replace(".", ","),
+      budgetAlert50: budgetAlert(50), budgetAlertColor50: budgetAlertColor(50),
+      budgetAlert80: budgetAlert(80), budgetAlertColor80: budgetAlertColor(80),
+      budgetAlert100: budgetAlert(100), budgetAlertColor100: budgetAlertColor(100),
       flowStages: Component.FLOW_STAGES,
       agents: agents, blockedTasks: blockedTasks, blockedTasksEmpty: blockedTasks.length === 0,
 
@@ -850,7 +1283,7 @@ class Component extends DCLogic {
         this.showToast("MCP Design reconectado.");
       },
 
-      incidents: incidents, projects: projects,
+      incidents: incidents, noIncidents: incidents.length === 0, projects: projects,
       flags: flags, auditLog: this.state.auditLog, auditLogEmpty: this.state.auditLog.length === 0,
     };
   }

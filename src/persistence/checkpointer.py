@@ -95,9 +95,10 @@ class SQLiteCheckpointer:
                 active.pop(key, None)
         return list(active.values())
 
-    def finish_active_agents(self, execution_id: str, status: str = "cancelled") -> None:
+    def finish_active_agents(self, execution_id: str, status: str = "cancelled", summary: str | None = None) -> None:
         """Close durable agent lifecycle entries when an execution is cancelled."""
         now = datetime.now(timezone.utc).isoformat()
+        summary = summary or "execution cancelled"
         for active in self.active_agents():
             if active["execution_id"] != execution_id:
                 continue
@@ -107,9 +108,42 @@ class SQLiteCheckpointer:
                 "agent": active["agent"],
                 "task_id": active.get("task_id"),
                 "status": status,
-                "result": {"status": status, "summary": "execution cancelled"},
+                "result": {"status": status, "summary": summary},
             }
             self.event(execution_id, "agent.finished", payload, now)
+
+    def reconcile_interrupted_executions(self, summary: str = "orchestrator restarted while this agent was running") -> list[str]:
+        """Close out agents left dangling ``started`` by a process that died mid-flight.
+
+        ``active_agents()`` only knows about durable started/finished events — a crash or a
+        manual restart between the two leaves a phantom "running" agent forever, which is
+        exactly what the dashboard's live-agent overlay reads. Call this once at API startup,
+        before anything reads the store, so a restart self-heals instead of accumulating ghosts.
+        """
+        stale_execution_ids = sorted({active["execution_id"] for active in self.active_agents()})
+        for execution_id in stale_execution_ids:
+            self.finish_active_agents(execution_id, status="interrupted", summary=summary)
+
+        # A process can also die between graph nodes, with no agent mid-flight at all — the
+        # durable "running" status itself is then just as stuck, and the dashboard's summary
+        # tile and Executions list read that status directly, independent of active_agents().
+        now = datetime.now(timezone.utc).isoformat()
+        with self._connect() as db:
+            rows = db.execute("SELECT execution_id FROM executions WHERE status = 'running'").fetchall()
+        for execution_id in {row["execution_id"] for row in rows}:
+            state = self.load(execution_id)
+            if not state or state.get("status") != "running":
+                continue
+            state = dict(state)
+            state["status"] = "failed"
+            state["next_action"] = "done"
+            state["updated_at"] = now
+            errors = list(state.get("errors") or [])
+            if summary not in errors:
+                errors.append(summary)
+            state["errors"] = errors
+            self.save(execution_id, state, "startup_reconcile")
+        return stale_execution_ids
 
     def agent_run(self, execution_id: str, agent: str, task_id: str | None, result: dict[str, Any], created_at: str) -> None:
         with self._connect() as db:

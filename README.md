@@ -35,6 +35,7 @@ execution policy restritiva. A versão verificada nesta máquina é
 python -m orchestrator discover
 python -m orchestrator check-codex
 python -m orchestrator run --feature "Adicionar uma funcionalidade de baixo risco" --dry-run
+python -m orchestrator run --feature "Revisar a segurança sem alterar arquivos" --analysis-only
 python -m orchestrator api --host 127.0.0.1 --port 8000
 ```
 
@@ -44,7 +45,28 @@ dos sete agentes. O dashboard reflete os eventos e checkpoints pelo polling de
 
 A API expõe `POST /executions`, `GET /executions`, `GET /executions/{id}`,
 `POST /executions/{id}/cancel`, `POST /executions/{id}/resume`,
-`GET /executions/{id}/logs`, `GET /executions/{id}/health` e `GET /dashboard-data`.
+`GET /executions/{id}/logs`, `GET /executions/{id}/health`, `GET /dashboard-data`,
+`GET /events`, `GET /events/view` e as rotas de skills em
+`/projects/{frontend|backend|python}/skills`.
+
+### Ponte MCP para o Codex
+
+Instale o extra MCP e registre o servidor stdio usando o executável absoluto
+do ambiente virtual. A API precisa estar em execução porque a ponte encaminha
+as solicitações para a mesma instância que alimenta o painel:
+
+```powershell
+python -m pip install -e ".[dev,mcp]"
+$orchestratorMcp = (Resolve-Path .\.venv\Scripts\bezalel-orchestrator-mcp.exe).Path
+codex mcp add bezalel-orchestrator --env ORCHESTRATOR_API_URL=http://127.0.0.1:8000 -- $orchestratorMcp
+codex mcp get bezalel-orchestrator
+```
+
+O servidor oferece `run_orchestrator_feature` para iniciar uma execução e
+`check_orchestrator_execution` para consultar seu estado. Em revisões e
+auditorias, envie `analysis_only=true`; esse modo instrui os agentes a não
+alterarem arquivos e bloqueia commit, merge e deploy independentemente das
+opções automáticas. O progresso aparece no painel `/` e em `/events/view`.
 
 O endpoint `/` serve o protótipo visual do Agent Control quando o export do
 Claude Design está disponível. Por padrão ele procura

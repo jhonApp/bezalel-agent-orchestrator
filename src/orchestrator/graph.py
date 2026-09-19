@@ -57,8 +57,15 @@ class OrchestrationGraph:
         state = self.runtime.store.load(execution_id)
         if not state:
             raise KeyError(execution_id)
+        state = dict(state)
         state["status"] = "running"
+        state["next_action"] = "analyze_request"
         state["approvals"] = {**state.get("approvals", {}), "resumed": True}
+        state["updated_at"] = utc_now()
+        # run() re-reads the store and short-circuits when status/next_action say "already
+        # finished" — persist the flip before calling it, or a resume of a failed/completed
+        # execution silently no-ops (run() sees the untouched old state, not this local copy).
+        self.runtime.store.save(execution_id, state, "resume")
         self.runtime.cancel_event(execution_id).clear()
         request = ExecutionRequest(feature_request=state["feature_request"], project_id=state.get("project_id", "bezalel"), execution_id=execution_id,
                                    dry_run=bool(state.get("approvals", {}).get("dry_run", False)))

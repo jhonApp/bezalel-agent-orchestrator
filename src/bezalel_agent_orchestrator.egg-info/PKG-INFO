@@ -6,14 +6,19 @@ Requires-Python: >=3.11
 Description-Content-Type: text/markdown
 Requires-Dist: fastapi<1,>=0.115
 Requires-Dist: langgraph==0.4.1
+Requires-Dist: langgraph-checkpoint-sqlite==2.0.11
+Requires-Dist: aiosqlite<0.22,>=0.20
 Requires-Dist: langsmith<1,>=0.3.45
 Requires-Dist: pydantic==2.11.3
 Requires-Dist: python-dotenv<2,>=1.0
 Requires-Dist: uvicorn[standard]<1,>=0.34
+Requires-Dist: httpx<1,>=0.27
 Provides-Extra: dev
-Requires-Dist: httpx<1,>=0.27; extra == "dev"
+Requires-Dist: mcp<3,>=1.2; extra == "dev"
 Requires-Dist: pytest<10,>=8; extra == "dev"
 Requires-Dist: pytest-asyncio<1,>=0.24; extra == "dev"
+Provides-Extra: mcp
+Requires-Dist: mcp<3,>=1.2; extra == "mcp"
 
 # bezalel-agent-orchestrator
 
@@ -52,12 +57,38 @@ execution policy restritiva. A versão verificada nesta máquina é
 python -m orchestrator discover
 python -m orchestrator check-codex
 python -m orchestrator run --feature "Adicionar uma funcionalidade de baixo risco" --dry-run
+python -m orchestrator run --feature "Revisar a segurança sem alterar arquivos" --analysis-only
 python -m orchestrator api --host 127.0.0.1 --port 8000
 ```
 
+Use `POST /executions` ou o subcomando `run` para executar tarefas pelo grafo
+dos sete agentes. O dashboard reflete os eventos e checkpoints pelo polling de
+`/dashboard-data`.
+
 A API expõe `POST /executions`, `GET /executions`, `GET /executions/{id}`,
 `POST /executions/{id}/cancel`, `POST /executions/{id}/resume`,
-`GET /executions/{id}/logs`, `GET /executions/{id}/health` e `GET /dashboard-data`.
+`GET /executions/{id}/logs`, `GET /executions/{id}/health`, `GET /dashboard-data`,
+`GET /events`, `GET /events/view` e as rotas de skills em
+`/projects/{frontend|backend|python}/skills`.
+
+### Ponte MCP para o Codex
+
+Instale o extra MCP e registre o servidor stdio usando o executável absoluto
+do ambiente virtual. A API precisa estar em execução porque a ponte encaminha
+as solicitações para a mesma instância que alimenta o painel:
+
+```powershell
+python -m pip install -e ".[dev,mcp]"
+$orchestratorMcp = (Resolve-Path .\.venv\Scripts\bezalel-orchestrator-mcp.exe).Path
+codex mcp add bezalel-orchestrator --env ORCHESTRATOR_API_URL=http://127.0.0.1:8000 -- $orchestratorMcp
+codex mcp get bezalel-orchestrator
+```
+
+O servidor oferece `run_orchestrator_feature` para iniciar uma execução e
+`check_orchestrator_execution` para consultar seu estado. Em revisões e
+auditorias, envie `analysis_only=true`; esse modo instrui os agentes a não
+alterarem arquivos e bloqueia commit, merge e deploy independentemente das
+opções automáticas. O progresso aparece no painel `/` e em `/events/view`.
 
 O endpoint `/` serve o protótipo visual do Agent Control quando o export do
 Claude Design está disponível. Por padrão ele procura
@@ -78,6 +109,33 @@ um comando explícito forem encontrados; caso contrário o resultado é
 LangSmith é opcional e controlado por `LANGSMITH_TRACING`. Um adaptador
 preparado para PostgreSQL fica em `src/persistence/postgres.py`; SQLite é o
 default local.
+
+### Tracing de sessões Codex
+
+O projeto habilita o plugin oficial `tracing@langsmith-codex-plugins` para
+capturar mensagens, ferramentas, tokens e subagentes de cada sessão Codex.
+Instale-o uma vez por máquina:
+
+```powershell
+codex plugin marketplace add langchain-ai/langsmith-codex-plugins
+codex plugin add tracing@langsmith-codex-plugins
+```
+
+Nunca grave a chave no repositório. No ambiente que pode enviar os dados, use:
+
+```powershell
+$env:TRACE_TO_LANGSMITH = "true"
+$env:LANGSMITH_CODEX_API_KEY = "<sua-chave-langsmith>"
+$env:LANGSMITH_CODEX_PROJECT = "bezalel-agent-orchestrator"
+```
+
+O orquestrador inclui ID da execução, tarefa, projeto e saúde de contexto nos
+metadados. Com as credenciais disponíveis, ele passa headers distribuídos ao
+plugin para anexar a árvore detalhada do Codex ao run pai do orquestrador. O
+painel local permanece a fonte do lifecycle e dos eventos de domínio; o
+LangSmith fornece o transcript detalhado correlacionado. O plugin envia o
+transcript completo ao LangSmith, portanto não o habilite para sessões com
+dados que não possam ser armazenados lá.
 
 ## Arquitetura e operação
 

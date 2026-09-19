@@ -8,7 +8,7 @@ import shlex
 import tempfile
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 from orchestrator.config import Settings
 from observability.langsmith import LangSmithObserver
@@ -99,7 +99,8 @@ class CodexCLI:
 
     async def execute(self, prompt: str, workdir: Path, role: str, timeout: int | None = None,
                       cancel_event: asyncio.Event | None = None,
-                      trace_metadata: dict[str, Any] | None = None) -> AgentResult:
+                      trace_metadata: dict[str, Any] | None = None,
+                      on_event: Callable[[dict[str, Any]], Awaitable[None]] | None = None) -> AgentResult:
         timeout = timeout or self.settings.agent_timeout_seconds
         started = time.perf_counter()
         workdir = workdir.resolve()
@@ -116,21 +117,39 @@ class CodexCLI:
                     process = await asyncio.create_subprocess_exec(*command, cwd=str(workdir), env=environment,
                                                                     stdin=asyncio.subprocess.PIPE,
                                                                     stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-                    communicate = asyncio.create_task(process.communicate(full_prompt.encode("utf-8")))
+
+                    async def write_stdin() -> None:
+                        try:
+                            process.stdin.write(full_prompt.encode("utf-8"))
+                            await process.stdin.drain()
+                        finally:
+                            process.stdin.close()
+
+                    stdout_buffer: list[bytes] = []
+                    stderr_buffer: list[bytes] = []
+                    stdin_task = asyncio.create_task(write_stdin())
+                    stdout_task = asyncio.create_task(
+                        self._pump(process.stdout, "stdout", stdout_buffer, on_event))
+                    stderr_task = asyncio.create_task(
+                        self._pump(process.stderr, "stderr", stderr_buffer, on_event))
+                    wait_task = asyncio.create_task(process.wait())
+                    combined = asyncio.gather(stdin_task, stdout_task, stderr_task, wait_task)
                     deadline = time.monotonic() + timeout
-                    while not communicate.done():
+                    while not combined.done():
                         if cancel_event and cancel_event.is_set():
                             process.kill()
-                            await communicate
+                            await combined
                             return AgentResult(agent=role, status="blocked", summary="cancelled", errors=["execution cancelled"],
                                                duration_seconds=time.perf_counter() - started)
                         if time.monotonic() >= deadline:
                             process.kill()
-                            await communicate
+                            await combined
                             return AgentResult(agent=role, status="failed", summary="Codex timeout", errors=["agent timeout"],
                                                duration_seconds=time.perf_counter() - started)
                         await asyncio.sleep(0.2)
-                    stdout, stderr = communicate.result()
+                    await combined
+                    stdout = b"".join(stdout_buffer)
+                    stderr = b"".join(stderr_buffer)
             except OSError as exc:
                 return AgentResult(agent=role, status="failed", summary="Codex CLI unavailable", errors=[str(exc)],
                                    duration_seconds=time.perf_counter() - started)
@@ -147,6 +166,36 @@ class CodexCLI:
             diagnostic_output = response_text or raw or err
             parsed.raw_response = self._redact(diagnostic_output[-self.settings.max_output_chars:])
             return parsed
+
+    async def _pump(self, stream: asyncio.StreamReader, label: str, buffer: list[bytes],
+                    on_event: Callable[[dict[str, Any]], Awaitable[None]] | None) -> None:
+        """Drain a subprocess stream line-by-line, forwarding each line as it arrives.
+
+        Reading incrementally (instead of ``process.communicate()``) is what makes
+        real-time progress possible: the caller learns about a line the moment Codex
+        writes it, not after the whole ``codex exec`` session finishes.
+        """
+        while True:
+            line = await stream.readline()
+            if not line:
+                break
+            buffer.append(line)
+            if on_event is None:
+                continue
+            text = self._redact(line.decode("utf-8", errors="replace").rstrip("\r\n"))
+            parsed: dict[str, Any] | None = None
+            stripped = text.strip()
+            if stripped.startswith("{"):
+                try:
+                    candidate = json.loads(stripped)
+                except (json.JSONDecodeError, ValueError):
+                    candidate = None
+                if isinstance(candidate, dict):
+                    parsed = candidate
+            try:
+                await on_event({"stream": label, "parsed": parsed, "raw": text})
+            except Exception:
+                pass
 
     def _exec_command(self, workdir: Path, schema_path: Path, output_path: Path) -> list[str]:
         """Build an invocation compatible with the installed non-interactive CLI.

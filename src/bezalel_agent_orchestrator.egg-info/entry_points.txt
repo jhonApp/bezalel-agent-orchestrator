@@ -1,2 +1,3 @@
 [console_scripts]
 bezalel-orchestrator = orchestrator.main:cli
+bezalel-orchestrator-mcp = orchestrator.mcp_bridge:main

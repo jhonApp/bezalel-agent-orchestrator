@@ -69,6 +69,82 @@ async def test_managed_codex_subprocess_preserves_nonzero_failure(tmp_path: Path
     assert result.errors
 
 
+FAKE_CODEX_STREAM = r'''
+import json
+import pathlib
+import sys
+import time
+
+output = pathlib.Path(sys.argv[sys.argv.index("--output-last-message") + 1])
+print(json.dumps({"kind": "reasoning", "text": "inspecting repository"}), flush=True)
+time.sleep(0.02)
+print(json.dumps({"kind": "tool_call", "tool": "apply_patch", "path": "src/App.tsx"}), flush=True)
+time.sleep(0.02)
+print("plain progress line, not json", flush=True)
+time.sleep(0.02)
+output.write_text(json.dumps({
+    "status": "completed", "summary": "streamed run",
+    "files_changed": ["src/App.tsx"], "tests": [], "contracts_changed": [],
+    "errors": [], "next_action": None, "tokens_input": 1, "tokens_output": 1,
+}), encoding="utf-8")
+sys.exit(0)
+'''
+
+FAKE_CODEX_STREAM_SECRET = r'''
+import json
+import pathlib
+import sys
+
+output = pathlib.Path(sys.argv[sys.argv.index("--output-last-message") + 1])
+print('token: "sk-super-secret-value-123"', flush=True)
+output.write_text(json.dumps({
+    "status": "completed", "summary": "streamed run",
+    "files_changed": [], "tests": [], "contracts_changed": [],
+    "errors": [], "next_action": None, "tokens_input": 1, "tokens_output": 1,
+}), encoding="utf-8")
+sys.exit(0)
+'''
+
+
+@pytest.mark.asyncio
+async def test_execute_streams_events_while_process_is_running(tmp_path: Path):
+    script = tmp_path / "fake_codex_stream.py"
+    script.write_text(FAKE_CODEX_STREAM, encoding="utf-8")
+    settings = settings_for(tmp_path, f'"{sys.executable}" "{script}"')
+
+    collected: list[dict] = []
+
+    async def on_event(event: dict) -> None:
+        collected.append(event)
+
+    result = await CodexCLI(settings).execute("exercise", tmp_path, "frontend", on_event=on_event)
+
+    assert result.status == "completed"
+    parsed_kinds = [event["parsed"]["kind"] for event in collected if event.get("parsed")]
+    assert parsed_kinds == ["reasoning", "tool_call"]
+    raw_lines = [event["raw"] for event in collected]
+    assert any("plain progress line, not json" in line for line in raw_lines)
+    assert all(event.get("parsed") is None for event in collected if "plain progress line" in event["raw"])
+
+
+@pytest.mark.asyncio
+async def test_execute_redacts_secrets_in_streamed_lines(tmp_path: Path):
+    script = tmp_path / "fake_codex_secret.py"
+    script.write_text(FAKE_CODEX_STREAM_SECRET, encoding="utf-8")
+    settings = settings_for(tmp_path, f'"{sys.executable}" "{script}"')
+
+    collected: list[dict] = []
+
+    async def on_event(event: dict) -> None:
+        collected.append(event)
+
+    result = await CodexCLI(settings).execute("exercise", tmp_path, "frontend", on_event=on_event)
+
+    assert result.status == "completed"
+    assert any("[REDACTED]" in event["raw"] for event in collected)
+    assert not any("sk-super-secret-value-123" in event["raw"] for event in collected)
+
+
 def test_dashboard_lifecycle_is_durable_across_store_instances(tmp_path: Path):
     path = tmp_path / "events.sqlite3"
     first = SQLiteCheckpointer(path)

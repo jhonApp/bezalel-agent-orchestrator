@@ -98,6 +98,15 @@ class ExecutionRuntime:
         workdir = self.workdir_for(state, task["project_id"])
         prompt = role_prompt(role, self.settings.orchestrator_root / "prompts")
         prompt += f"\n\nFeature request:\n{state['feature_request']}\n\nTask {task['task_id']}: {task['description']}\nAcceptance criteria:\n" + "\n".join(f"- {x}" for x in task.get("acceptance_criteria", []))
+        if state.get("approvals", {}).get("analysis_only"):
+            prompt += ("\n\nANALYSIS-ONLY MODE: Do not create, modify, or delete any file. Read the code and "
+                       "return your findings, risks and recommendations in `summary`. `files_changed` must stay empty.")
+        async def on_event(event: dict[str, Any]) -> None:
+            await self.publish({
+                "type": "agent.stream", "execution_id": state["execution_id"],
+                "agent": role, "task_id": task["task_id"], **event,
+            })
+
         attempts = 0
         last: AgentResult | None = None
         while attempts <= self.settings.max_retries:
@@ -110,7 +119,8 @@ class ExecutionRuntime:
                                                   "orchestrator_task_id": task["task_id"],
                                                   "orchestrator_project_id": task["project_id"],
                                                   "context_health": state.get("context_health", {}),
-                                              })
+                                              },
+                                              on_event=on_event)
             last = result
             if result.status == "completed":
                 break
@@ -400,7 +410,8 @@ async def commit_changes(runtime: ExecutionRuntime, state: dict[str, Any]) -> di
     commits = []
     if not passed:
         state["errors"].extend(["commit blocked: " + reason for reason in reasons])
-    elif runtime.settings.auto_commit and not state.get("approvals", {}).get("dry_run"):
+    elif (runtime.settings.auto_commit and not state.get("approvals", {}).get("dry_run")
+          and not state.get("approvals", {}).get("analysis_only")):
         for project_id, info in state.get("worktrees", {}).items():
             path = Path(info["path"])
             try:
@@ -418,7 +429,8 @@ async def commit_changes(runtime: ExecutionRuntime, state: dict[str, Any]) -> di
 async def merge_changes(runtime: ExecutionRuntime, state: dict[str, Any]) -> dict[str, Any]:
     passed, reasons = gates_pass(state)
     merges = []
-    if passed and runtime.settings.auto_merge and not state.get("approvals", {}).get("dry_run"):
+    if (passed and runtime.settings.auto_merge and not state.get("approvals", {}).get("dry_run")
+            and not state.get("approvals", {}).get("analysis_only")):
         for commit in state.get("commits", []):
             info = state.get("worktrees", {}).get(commit["project_id"], {})
             base = info.get("base")
@@ -441,8 +453,10 @@ async def deploy(runtime: ExecutionRuntime, state: dict[str, Any]) -> dict[str, 
     results: list[DeployResult] = []
     if not passed:
         results = [DeployResult(project_id=p["project_id"], status="blocked", reason="; ".join(reasons)) for p in state.get("detected_projects", [])]
-    elif not runtime.settings.auto_deploy or state.get("approvals", {}).get("dry_run"):
-        results = [DeployResult(project_id=p["project_id"], status="skipped", reason="AUTO_DEPLOY=false or dry-run") for p in state.get("detected_projects", [])]
+    elif (not runtime.settings.auto_deploy or state.get("approvals", {}).get("dry_run")
+          or state.get("approvals", {}).get("analysis_only")):
+        reason = "analysis_only" if state.get("approvals", {}).get("analysis_only") else "AUTO_DEPLOY=false or dry-run"
+        results = [DeployResult(project_id=p["project_id"], status="skipped", reason=reason) for p in state.get("detected_projects", [])]
     else:
         for project in state.get("detected_projects", []):
             results.append(await runtime.deploy.execute(type("Project", (), project)(), runtime.workdir_for(state, project["project_id"])))

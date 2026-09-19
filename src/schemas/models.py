@@ -141,6 +141,7 @@ class ExecutionRequest(BaseModel):
     project_id: str = "bezalel"
     execution_id: str | None = None
     dry_run: bool = False
+    analysis_only: bool = False
 
 
 class ExecutionStateModel(BaseModel):
@@ -182,5 +183,5 @@ def initial_state(request: ExecutionRequest, execution_id: str) -> dict[str, Any
         project_id=request.project_id,
         feature_request=request.feature_request,
         status="created",
-        approvals={"dry_run": request.dry_run},
+        approvals={"dry_run": request.dry_run, "analysis_only": request.analysis_only},
     ).model_dump(mode="json")

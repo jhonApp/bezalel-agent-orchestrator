@@ -29,8 +29,14 @@ except ImportError:  # pragma: no cover - exercised only before optional install
 from orchestrator.config import Settings
 from orchestrator.graph import OrchestrationGraph
 from agents.registry import AGENT_ROLES
+from adapters.skills import install_skill, list_skills, remove_skill
 from observability.live_events import LiveEventBroker
 from schemas.models import ExecutionRequest
+
+
+class SkillInstallRequest(BaseModel):
+    package: str
+    skill: str | None = None
 
 
 class ProfileAssetRequest(BaseModel):
@@ -141,6 +147,7 @@ def create_app(settings: Settings | None = None) -> Any:
             app.state.graph = graph
             app.state.manager = ExecutionManager(graph)
             app.state.event_broker = broker
+            graph.runtime.store.reconcile_interrupted_executions()
             yield
 
     app = FastAPI(title="Bezalel Agent Orchestrator", version="0.1.0", lifespan=lifespan)
@@ -249,6 +256,15 @@ def create_app(settings: Settings | None = None) -> Any:
                 "status": durable_state.get("status", state.get("status", "unknown")),
                 "created_at": state.get("started_at", ""),
                 "updated_at": durable_state.get("updated_at", state.get("updated_at", "")),
+                "errors": durable_state.get("errors", state.get("errors", [])),
+                "security_findings": [
+                    {"path": f.get("path"), "message": f.get("message")}
+                    for f in state.get("security_findings", []) if f.get("severity") == "blocking"
+                ],
+                "contract_findings": [
+                    {"resource": f.get("resource"), "message": f.get("message")}
+                    for f in state.get("contracts", []) if f.get("severity") == "blocking"
+                ],
             })
         executions.sort(key=lambda item: item["updated_at"], reverse=True)
         metrics = [item for item in langgraph_agent_metrics(states) if item["agent"] in AGENT_ROLES]
@@ -264,10 +280,21 @@ def create_app(settings: Settings | None = None) -> Any:
         for execution in executions:
             execution_id = execution["execution_id"]
             state = states.get(execution_id, {})
+            tasks = []
+            for task in state.get("plan", []):
+                if not task.get("agent"):
+                    continue
+                result = task.get("result") or {}
+                tasks.append({
+                    "task_id": task.get("task_id"), "agent": task["agent"], "status": task.get("status", "pending"),
+                    "summary": result.get("summary", ""), "files_changed": result.get("files_changed", []),
+                    "errors": result.get("errors", []),
+                })
             execution_items.append({
                 **execution,
                 "agent_keys": [task["agent"] for task in state.get("plan", []) if task.get("agent")],
                 "context_health": state.get("context_health", {}),
+                "tasks": tasks,
             })
         return {
             "executions": {
@@ -290,6 +317,38 @@ def create_app(settings: Settings | None = None) -> Any:
                 "updated_from": "LangGraph native checkpointer",
             },
         }
+
+    @app.get("/events/view", response_class=HTMLResponse)
+    async def events_view() -> Any:
+        """Minimal live-log page for `/events`, independent of the external Agent Control export."""
+        return HTMLResponse(content="""<!doctype html>
+<html><head><meta charset="utf-8"><title>Bezalel Orchestrator — live events</title>
+<style>
+body{background:#0a0e14;color:#e8edf3;font:13px/1.5 ui-monospace,Consolas,monospace;margin:0;padding:16px}
+h1{font-size:14px;color:#93a1b2;font-weight:600;margin:0 0 12px}
+#log{white-space:pre-wrap;word-break:break-word}
+.line{border-bottom:1px solid #2a3446;padding:6px 0}
+.line b{color:#f5a524}
+</style></head>
+<body>
+<h1>/events — live stream</h1>
+<div id="log"></div>
+<script>
+const log = document.getElementById("log");
+const source = new EventSource("/events");
+source.addEventListener("orchestration", (message) => {
+  const line = document.createElement("div");
+  line.className = "line";
+  const stamp = document.createElement("b");
+  stamp.textContent = new Date().toLocaleTimeString() + " ";
+  let data = message.data;
+  try { data = JSON.stringify(JSON.parse(message.data)); } catch (err) {}
+  line.appendChild(stamp);
+  line.appendChild(document.createTextNode(data));
+  log.prepend(line);
+});
+</script>
+</body></html>""")
 
     @app.get("/events")
     async def events() -> Any:
@@ -349,5 +408,24 @@ def create_app(settings: Settings | None = None) -> Any:
         if not settings_store().load(execution_id):
             raise HTTPException(status_code=404, detail="execution not found")
         return settings_store().agent_history(execution_id)
+
+    def project_path(project_id: str) -> Path:
+        paths = {"frontend": settings.frontend_path, "backend": settings.backend_path, "python": settings.python_path}
+        if project_id not in paths:
+            raise HTTPException(status_code=404, detail=f"unknown project_id '{project_id}'")
+        return paths[project_id]
+
+    @app.get("/projects/{project_id}/skills")
+    async def get_project_skills(project_id: str) -> dict[str, Any]:
+        result = await list_skills(project_path(project_id))
+        return {"project_id": project_id, **result}
+
+    @app.post("/projects/{project_id}/skills")
+    async def post_project_skills(project_id: str, request: SkillInstallRequest) -> dict[str, Any]:
+        return await install_skill(project_path(project_id), request.package, request.skill)
+
+    @app.delete("/projects/{project_id}/skills/{skill}")
+    async def delete_project_skill(project_id: str, skill: str) -> dict[str, Any]:
+        return await remove_skill(project_path(project_id), skill)
 
     return app

@@ -132,7 +132,11 @@ class Settings(BaseModel):
             use_worktrees=_bool("USE_WORKTREES", True),
             cleanup_worktrees=_bool("CLEANUP_WORKTREES", False),
             codex_approval_policy=os.getenv("CODEX_APPROVAL_POLICY", "never"),
-            codex_sandbox=os.getenv("CODEX_SANDBOX", "workspace-write"),
+            # workspace-write rejects even read-only commands (git status, ls) under this Codex
+            # CLI's Windows sandbox implementation — danger-full-access is what the working
+            # --dangerously-bypass-approvals-and-sandbox interactive sessions already use;
+            # git worktree isolation is the real containment, not the OS sandbox, on this platform.
+            codex_sandbox=os.getenv("CODEX_SANDBOX", "danger-full-access" if os.name == "nt" else "workspace-write"),
             context_token_warning=_int("CONTEXT_TOKEN_WARNING", 24000),
             context_token_critical=_int("CONTEXT_TOKEN_CRITICAL", 60000),
             cost_per_1m_input=_float("CONTEXT_COST_PER_1M_INPUT", 1.75),
