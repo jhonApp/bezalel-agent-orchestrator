@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from schemas.models import AgentResult, utc_now
+
 _PARSE_FAILURE_ERROR = "structured output could not be parsed"
 _DOMAIN_AGENTS = {"frontend", "backend", "python_ai"}
 
@@ -58,3 +60,32 @@ def blend_quality_score(axes: dict[str, int | None]) -> float | None:
     if not values:
         return None
     return round(sum(values) / len(values), 1)
+
+
+def build_quality_entry(project_id: str, state: dict[str, Any], agent_result: AgentResult) -> dict[str, Any]:
+    """One quality_scores entry for a project the reviewer just examined: heuristic axes
+    (tests/security/parse) blended with the reviewer's own LLM judgement (relevante/
+    fonte_utilizada/alucinacao/cumprimento_regras).
+    """
+    task = _producing_task(project_id, state)
+    result = (task.get("result") or {}) if task else {}
+    quality = agent_result.quality or {}
+    axes = {
+        "correta": heuristic_correta(project_id, state),
+        "relevante": quality.get("relevante"),
+        "fonte_utilizada": quality.get("fonte_utilizada"),
+        "alucinacao": quality.get("alucinacao"),
+        "formato_valido": heuristic_formato_valido(project_id, state),
+        "cumprimento_regras": quality.get("cumprimento_regras"),
+        "seguranca": heuristic_seguranca(project_id, state),
+    }
+    return {
+        "project_id": project_id,
+        "agent": task.get("agent") if task else None,
+        "prompt_version": result.get("prompt_version"),
+        "axes": axes,
+        "quality_score": blend_quality_score(axes),
+        "estimated_cost": result.get("estimated_cost", 0.0),
+        "duration_seconds": result.get("duration_seconds", 0.0),
+        "computed_at": utc_now(),
+    }
