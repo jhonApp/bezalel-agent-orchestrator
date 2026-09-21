@@ -208,13 +208,14 @@ async def classify_projects(runtime: ExecutionRuntime, state: dict[str, Any]) ->
 
 async def create_plan(runtime: ExecutionRuntime, state: dict[str, Any]) -> dict[str, Any]:
     existing = {p["project_id"] for p in state.get("detected_projects", []) if p.get("exists")}
+    relevant = state.get("relevant_projects") or existing
     tasks: list[TaskSpec] = []
     for number, (role, project, description) in enumerate([
         ("frontend", "frontend", "Implement the frontend portion of the feature using the detected stack and design system."),
         ("backend", "backend", "Implement backend/API/domain changes and preserve current AWS and authorization conventions."),
         ("python_ai", "python", "Implement Python/LangGraph workflow or prompt changes required by the feature."),
     ], 1):
-        if project in existing:
+        if project in existing and project in relevant:
             tasks.append(TaskSpec(task_id=f"T{number:03d}", agent=role, project_id=project, description=description,
                                   acceptance_criteria=["Return changed files", "Return validation evidence", "Do not expose secrets"]))
     base_ids = [task.task_id for task in tasks]

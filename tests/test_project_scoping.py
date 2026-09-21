@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -145,3 +146,53 @@ async def test_classify_projects_node_filters_the_override_by_existing_projects(
     result = await nodes.classify_projects(runtime, state)
 
     assert result["relevant_projects"] == ["frontend"]
+
+
+class StubPersistRuntime:
+    async def persist(self, state, node, event=None, payload=None):
+        return state
+
+
+def test_create_plan_only_creates_tasks_for_relevant_projects():
+    state = {
+        "detected_projects": [
+            {"project_id": "frontend", "exists": True},
+            {"project_id": "backend", "exists": True},
+            {"project_id": "python", "exists": True},
+        ],
+        "relevant_projects": ["frontend"],
+    }
+
+    result = asyncio.run(nodes.create_plan(StubPersistRuntime(), state))
+
+    domain_tasks = [t for t in result["plan"] if t["agent"] in ("frontend", "backend", "python_ai")]
+    assert [t["agent"] for t in domain_tasks] == ["frontend"]
+
+
+def test_create_plan_gate_tasks_depend_only_on_the_relevant_domain_tasks():
+    state = {
+        "detected_projects": [
+            {"project_id": "frontend", "exists": True},
+            {"project_id": "backend", "exists": True},
+        ],
+        "relevant_projects": ["backend"],
+    }
+
+    result = asyncio.run(nodes.create_plan(StubPersistRuntime(), state))
+
+    contracts = next(t for t in result["plan"] if t["agent"] == "contracts")
+    backend_task = next(t for t in result["plan"] if t["agent"] == "backend")
+    assert contracts["dependencies"] == [backend_task["task_id"]]
+
+
+def test_create_plan_falls_back_to_existing_when_relevant_projects_is_absent():
+    """Defensive default: relevant_projects should always be set by classify_projects by
+    the time create_plan runs, but if it's ever missing, don't silently create zero tasks."""
+    state = {
+        "detected_projects": [{"project_id": "frontend", "exists": True}],
+    }
+
+    result = asyncio.run(nodes.create_plan(StubPersistRuntime(), state))
+
+    domain_tasks = [t for t in result["plan"] if t["agent"] in ("frontend", "backend", "python_ai")]
+    assert [t["agent"] for t in domain_tasks] == ["frontend"]
