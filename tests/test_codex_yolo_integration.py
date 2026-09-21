@@ -5,7 +5,7 @@ import sys
 
 import pytest
 
-from adapters.codex_cli import CodexCLI
+from adapters.codex_cli import CLASSIFIER_SCHEMA, CodexCLI
 from orchestrator.config import Settings
 from orchestrator.codex_launcher import run_codex_yolo
 from persistence.checkpointer import SQLiteCheckpointer
@@ -252,3 +252,75 @@ async def test_codex_yolo_launcher_persists_dashboard_lifecycle(tmp_path: Path):
     events = store.logs(result["execution_id"])
     assert [event["event_type"] for event in events] == ["agent.started", "agent.finished"]
     assert store.active_agents() == []
+
+
+FAKE_CLASSIFIER_OK = r'''
+import json
+import pathlib
+import sys
+output = pathlib.Path(sys.argv[sys.argv.index("--output-last-message") + 1])
+output.write_text(json.dumps({"frontend": True, "backend": False, "python": False}), encoding="utf-8")
+sys.exit(0)
+'''
+
+FAKE_CLASSIFIER_FAILS = r'''
+import sys
+sys.exit(1)
+'''
+
+FAKE_CLASSIFIER_MALFORMED = r'''
+import pathlib
+import sys
+output = pathlib.Path(sys.argv[sys.argv.index("--output-last-message") + 1])
+output.write_text("not json", encoding="utf-8")
+sys.exit(0)
+'''
+
+FAKE_CLASSIFIER_HANGS = r'''
+import time
+time.sleep(5)
+'''
+
+
+@pytest.mark.asyncio
+async def test_execute_json_returns_the_parsed_dict_on_success(tmp_path: Path):
+    script = tmp_path / "fake_classifier.py"
+    script.write_text(FAKE_CLASSIFIER_OK, encoding="utf-8")
+    settings = settings_for(tmp_path, f'"{sys.executable}" "{script}"')
+
+    result = await CodexCLI(settings).execute_json("classify this", tmp_path, CLASSIFIER_SCHEMA, "Classifier")
+
+    assert result == {"frontend": True, "backend": False, "python": False}
+
+
+@pytest.mark.asyncio
+async def test_execute_json_returns_none_on_nonzero_exit(tmp_path: Path):
+    script = tmp_path / "fake_classifier_fails.py"
+    script.write_text(FAKE_CLASSIFIER_FAILS, encoding="utf-8")
+    settings = settings_for(tmp_path, f'"{sys.executable}" "{script}"')
+
+    result = await CodexCLI(settings).execute_json("classify this", tmp_path, CLASSIFIER_SCHEMA, "Classifier")
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_execute_json_returns_none_on_malformed_json(tmp_path: Path):
+    script = tmp_path / "fake_classifier_malformed.py"
+    script.write_text(FAKE_CLASSIFIER_MALFORMED, encoding="utf-8")
+    settings = settings_for(tmp_path, f'"{sys.executable}" "{script}"')
+
+    result = await CodexCLI(settings).execute_json("classify this", tmp_path, CLASSIFIER_SCHEMA, "Classifier")
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_execute_json_returns_none_on_timeout(tmp_path: Path):
+    script = tmp_path / "fake_classifier_hangs.py"
+    script.write_text(FAKE_CLASSIFIER_HANGS, encoding="utf-8")
+    settings = settings_for(tmp_path, f'"{sys.executable}" "{script}"')
+
+    result = await CodexCLI(settings).execute_json("classify this", tmp_path, CLASSIFIER_SCHEMA, "Classifier", timeout=1)
+
+    assert result is None

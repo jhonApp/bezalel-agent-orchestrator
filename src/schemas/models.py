@@ -144,13 +144,16 @@ class ExecutionRequest(BaseModel):
     execution_id: str | None = None
     dry_run: bool = False
     analysis_only: bool = False
+    target_projects: list[str] | None = None
 
 
 class ExecutionStateModel(BaseModel):
     execution_id: str
     project_id: str
     feature_request: str
+    target_projects: list[str] | None = None
     detected_projects: list[ProjectDetection] = Field(default_factory=list)
+    relevant_projects: list[str] = Field(default_factory=list)
     architecture_summary: str = ""
     plan: list[TaskSpec] = Field(default_factory=list)
     active_task: str | None = None
@@ -186,6 +189,7 @@ def initial_state(request: ExecutionRequest, execution_id: str) -> dict[str, Any
         execution_id=execution_id,
         project_id=request.project_id,
         feature_request=request.feature_request,
+        target_projects=request.target_projects,
         status="created",
         approvals={"dry_run": request.dry_run, "analysis_only": request.analysis_only},
     ).model_dump(mode="json")

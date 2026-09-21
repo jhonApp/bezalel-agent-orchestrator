@@ -10,7 +10,7 @@ from typing import Any, Awaitable, Callable
 
 from agents.registry import AGENT_ROLES, role_prompt
 from agents.security import scan_project
-from adapters.codex_cli import CodexCLI
+from adapters.codex_cli import CLASSIFIER_SCHEMA, CodexCLI
 from adapters.command import run_command
 from adapters.deploy import DeployAdapter
 from adapters.git import GitError, GitManager
@@ -152,6 +152,27 @@ class ExecutionRuntime:
         self.store.event(state["execution_id"], "agent.finished", finished_event, utc_now())
         await self.publish(finished_event)
 
+    async def classify_relevant_projects(self, feature_request: str, existing: set[str]) -> tuple[list[str], str]:
+        """Ask Codex which domains this feature request actually touches, so create_plan
+        doesn't dispatch a full coding-agent session for a project with nothing to do.
+        Fails open (every existing project) on any classifier error — this call must
+        never be able to shrink the pipeline by failing.
+
+        Returns ``(relevant, source)`` where ``source`` is ``"classifier"`` when a real
+        classifier response was used, or ``"fail_open"`` when ``execute_json`` returned
+        ``None`` — so callers/observers can tell a deliberate "everything is relevant"
+        decision apart from a silently-degraded classifier (missing CLI, drifted flags,
+        timeout too short, etc.).
+        """
+        prompt = role_prompt("classifier", self.settings.orchestrator_root / "prompts")
+        prompt += f"\n\nFeature request:\n{feature_request}"
+        result = await self.codex.execute_json(prompt, self.settings.workspace_root, CLASSIFIER_SCHEMA, "Classifier")
+        if result is None:
+            return sorted(existing), "fail_open"
+        domains = {"frontend": "frontend", "backend": "backend", "python": "python"}
+        relevant = [project for domain, project in domains.items() if result.get(domain, True) and project in existing]
+        return relevant, "classifier"
+
 
 def _cancelled(runtime: ExecutionRuntime, state: dict[str, Any]) -> bool:
     return runtime.cancel_event(state["execution_id"]).is_set()
@@ -176,19 +197,34 @@ async def discover_projects_node(runtime: ExecutionRuntime, state: dict[str, Any
     missing = [p.expected_name for p in projects if not p.exists]
     if missing:
         state.setdefault("errors", []).append("missing project aliases: " + ", ".join(missing))
-    state["next_action"] = "create_plan"
+    state["next_action"] = "classify_projects"
     return await runtime.persist(state, "discover_projects", "projects.discovered", {"count": len(projects), "missing": missing})
+
+
+async def classify_projects(runtime: ExecutionRuntime, state: dict[str, Any]) -> dict[str, Any]:
+    existing = {p["project_id"] for p in state.get("detected_projects", []) if p.get("exists")}
+    override = state.get("target_projects")
+    if override is not None:
+        relevant = [p for p in override if p in existing]
+        source = "override"
+    else:
+        relevant, source = await runtime.classify_relevant_projects(state["feature_request"], existing)
+    state["relevant_projects"] = relevant
+    state["relevant_projects_source"] = source
+    state["next_action"] = "create_plan"
+    return await runtime.persist(state, "classify_projects", "projects.classified", {"relevant": relevant, "source": source})
 
 
 async def create_plan(runtime: ExecutionRuntime, state: dict[str, Any]) -> dict[str, Any]:
     existing = {p["project_id"] for p in state.get("detected_projects", []) if p.get("exists")}
+    relevant = existing if state.get("relevant_projects") is None else state["relevant_projects"]
     tasks: list[TaskSpec] = []
     for number, (role, project, description) in enumerate([
         ("frontend", "frontend", "Implement the frontend portion of the feature using the detected stack and design system."),
         ("backend", "backend", "Implement backend/API/domain changes and preserve current AWS and authorization conventions."),
         ("python_ai", "python", "Implement Python/LangGraph workflow or prompt changes required by the feature."),
     ], 1):
-        if project in existing:
+        if project in existing and project in relevant:
             tasks.append(TaskSpec(task_id=f"T{number:03d}", agent=role, project_id=project, description=description,
                                   acceptance_criteria=["Return changed files", "Return validation evidence", "Do not expose secrets"]))
     base_ids = [task.task_id for task in tasks]
