@@ -28,6 +28,7 @@ except ImportError:  # pragma: no cover - exercised only before optional install
 
 from orchestrator.config import Settings
 from orchestrator.graph import OrchestrationGraph
+from orchestrator.quality import quality_by_execution, quality_by_version
 from agents.registry import AGENT_ROLES
 from adapters.skills import install_skill, list_skills, remove_skill
 from observability.live_events import LiveEventBroker
@@ -268,6 +269,7 @@ def create_app(settings: Settings | None = None) -> Any:
                 "commits": state.get("commits", []),
                 "merges": state.get("merges", []),
                 "pull_requests": state.get("pull_requests", []),
+                "quality_scores": state.get("quality_scores", []),
             })
         executions.sort(key=lambda item: item["updated_at"], reverse=True)
         metrics = [item for item in langgraph_agent_metrics(states) if item["agent"] in AGENT_ROLES]
@@ -320,6 +322,13 @@ def create_app(settings: Settings | None = None) -> Any:
                 "updated_from": "LangGraph native checkpointer",
             },
         }
+
+    @app.get("/quality-data")
+    async def quality_data(limit: int = 200) -> dict[str, Any]:
+        """Per-project quality scores plus the prompt-version comparison table."""
+        states = await langgraph_states()
+        rows = quality_by_execution(states)
+        return {"by_execution": rows[:limit], "by_version": quality_by_version(rows)}
 
     @app.get("/events/view", response_class=HTMLResponse)
     async def events_view() -> Any:
