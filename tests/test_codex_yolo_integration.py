@@ -69,6 +69,44 @@ async def test_managed_codex_subprocess_preserves_nonzero_failure(tmp_path: Path
     assert result.errors
 
 
+FAKE_CODEX_REAL_USAGE = r'''
+import json
+import pathlib
+import sys
+output = pathlib.Path(sys.argv[sys.argv.index("--output-last-message") + 1])
+print(json.dumps({"type": "thread.started", "thread_id": "fake"}), flush=True)
+print(json.dumps({"type": "turn.completed", "usage": {"input_tokens": 18530, "output_tokens": 5, "cached_input_tokens": 0, "cache_write_input_tokens": 0, "reasoning_output_tokens": 0}}), flush=True)
+output.write_text(json.dumps({
+    "status": "completed", "summary": "fake codex run with real usage",
+    "files_changed": [], "tests": [], "contracts_changed": [],
+    "errors": [], "next_action": None, "tokens_input": 0, "tokens_output": 0,
+}), encoding="utf-8")
+sys.exit(0)
+'''
+
+
+@pytest.mark.asyncio
+async def test_execute_uses_codexs_real_turn_completed_usage_over_the_models_self_report(tmp_path: Path):
+    script = tmp_path / "fake_codex_real_usage.py"
+    script.write_text(FAKE_CODEX_REAL_USAGE, encoding="utf-8")
+    settings = settings_for(tmp_path, f'"{sys.executable}" "{script}"')
+
+    result = await CodexCLI(settings).execute("exercise", tmp_path, "frontend")
+
+    assert result.tokens_input == 18530
+    assert result.tokens_output == 5
+    expected_cost = (18530 * settings.cost_per_1m_input + 5 * settings.cost_per_1m_output) / 1_000_000
+    assert result.estimated_cost == pytest.approx(expected_cost)
+
+
+@pytest.mark.asyncio
+async def test_execute_falls_back_to_self_reported_tokens_when_no_turn_completed_event_is_present(tmp_path: Path, fake_codex: str):
+    result = await CodexCLI(settings_for(tmp_path, fake_codex)).execute("exercise", tmp_path, "frontend")
+
+    assert result.tokens_input == 3
+    assert result.tokens_output == 2
+
+
 FAKE_CODEX_STREAM = r'''
 import json
 import pathlib

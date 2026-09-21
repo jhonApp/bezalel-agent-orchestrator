@@ -175,6 +175,13 @@ class CodexCLI:
                 parsed.status = "failed"
             if err and (process.returncode != 0 or parsed.status == "failed"):
                 parsed.errors.append(self._redact(err[-2000:]))
+            real_usage = self._extract_real_token_usage(raw)
+            if real_usage is not None:
+                parsed.tokens_input, parsed.tokens_output = real_usage
+                parsed.estimated_cost = (
+                    parsed.tokens_input * self.settings.cost_per_1m_input
+                    + parsed.tokens_output * self.settings.cost_per_1m_output
+                ) / 1_000_000
             diagnostic_output = response_text or raw or err
             parsed.raw_response = self._redact(diagnostic_output[-self.settings.max_output_chars:])
             return parsed
@@ -269,6 +276,32 @@ class CodexCLI:
                 if isinstance(error, dict) and error.get("message"):
                     message = error["message"]
         return message
+
+    @staticmethod
+    def _extract_real_token_usage(raw: str) -> tuple[int, int] | None:
+        """The model's self-reported tokens_input/tokens_output in its structured JSON
+        answer are unreliable (observed as always 0 in real executions — the model has no
+        introspection into its own API-side usage). Codex's own ``turn.completed`` event
+        carries genuine counts from the underlying API response; prefer the last one, since
+        an exec turn can legitimately account for tool-call round-trips before completing.
+        """
+        usage: dict[str, Any] | None = None
+        for line in raw.splitlines():
+            line = line.strip()
+            if not line.startswith("{"):
+                continue
+            try:
+                candidate = json.loads(line)
+            except (json.JSONDecodeError, ValueError):
+                continue
+            if not isinstance(candidate, dict) or candidate.get("type") != "turn.completed":
+                continue
+            candidate_usage = candidate.get("usage")
+            if isinstance(candidate_usage, dict):
+                usage = candidate_usage
+        if usage is None:
+            return None
+        return int(usage.get("input_tokens") or 0), int(usage.get("output_tokens") or 0)
 
     @classmethod
     def _is_usage_limit_message(cls, message: str) -> bool:
