@@ -61,9 +61,10 @@ async def test_classify_relevant_projects_filters_by_the_classifier_result(tmp_p
     runtime = ExecutionRuntime(settings, store=SQLiteCheckpointer(settings.checkpoint_path),
                                codex=FakeCodexForClassifier({"frontend": True, "backend": False, "python": False}))
 
-    relevant = await runtime.classify_relevant_projects("add a button", {"frontend", "backend", "python"})
+    relevant, source = await runtime.classify_relevant_projects("add a button", {"frontend", "backend", "python"})
 
     assert relevant == ["frontend"]
+    assert source == "classifier"
 
 
 @pytest.mark.asyncio
@@ -72,9 +73,10 @@ async def test_classify_relevant_projects_fails_open_when_the_classifier_returns
     runtime = ExecutionRuntime(settings, store=SQLiteCheckpointer(settings.checkpoint_path),
                                codex=FakeCodexForClassifier(None))
 
-    relevant = await runtime.classify_relevant_projects("add a button", {"frontend", "backend"})
+    relevant, source = await runtime.classify_relevant_projects("add a button", {"frontend", "backend"})
 
     assert relevant == ["backend", "frontend"]
+    assert source == "fail_open"
 
 
 @pytest.mark.asyncio
@@ -83,21 +85,24 @@ async def test_classify_relevant_projects_defaults_a_missing_field_to_relevant(t
     runtime = ExecutionRuntime(settings, store=SQLiteCheckpointer(settings.checkpoint_path),
                                codex=FakeCodexForClassifier({"frontend": True}))
 
-    relevant = await runtime.classify_relevant_projects("add a button", {"frontend", "backend", "python"})
+    relevant, source = await runtime.classify_relevant_projects("add a button", {"frontend", "backend", "python"})
 
     assert set(relevant) == {"frontend", "backend", "python"}
+    assert source == "classifier"
 
 
 class StubClassifyRuntime:
     def __init__(self, relevant):
         self._relevant = relevant
         self.classify_calls = []
+        self.persist_calls = []
 
     async def classify_relevant_projects(self, feature_request, existing):
         self.classify_calls.append((feature_request, existing))
-        return self._relevant
+        return self._relevant, "classifier"
 
     async def persist(self, state, node, event=None, payload=None):
+        self.persist_calls.append((state, node, event, payload))
         return state
 
 
@@ -116,6 +121,8 @@ async def test_classify_projects_node_uses_the_override_and_skips_the_classifier
 
     assert result["relevant_projects"] == ["frontend"]
     assert runtime.classify_calls == []
+    assert result["relevant_projects_source"] == "override"
+    assert runtime.persist_calls[0][3]["source"] == "override"
 
 
 @pytest.mark.asyncio
@@ -133,6 +140,8 @@ async def test_classify_projects_node_calls_the_classifier_when_no_override_is_g
 
     assert result["relevant_projects"] == ["backend"]
     assert runtime.classify_calls == [("fix the endpoint", {"frontend", "backend"})]
+    assert result["relevant_projects_source"] == "classifier"
+    assert runtime.persist_calls[0][3]["source"] == "classifier"
 
 
 @pytest.mark.asyncio
@@ -146,6 +155,7 @@ async def test_classify_projects_node_filters_the_override_by_existing_projects(
     result = await nodes.classify_projects(runtime, state)
 
     assert result["relevant_projects"] == ["frontend"]
+    assert result["relevant_projects_source"] == "override"
 
 
 class StubPersistRuntime:

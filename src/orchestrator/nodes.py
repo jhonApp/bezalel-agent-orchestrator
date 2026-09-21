@@ -152,19 +152,26 @@ class ExecutionRuntime:
         self.store.event(state["execution_id"], "agent.finished", finished_event, utc_now())
         await self.publish(finished_event)
 
-    async def classify_relevant_projects(self, feature_request: str, existing: set[str]) -> list[str]:
+    async def classify_relevant_projects(self, feature_request: str, existing: set[str]) -> tuple[list[str], str]:
         """Ask Codex which domains this feature request actually touches, so create_plan
         doesn't dispatch a full coding-agent session for a project with nothing to do.
         Fails open (every existing project) on any classifier error — this call must
         never be able to shrink the pipeline by failing.
+
+        Returns ``(relevant, source)`` where ``source`` is ``"classifier"`` when a real
+        classifier response was used, or ``"fail_open"`` when ``execute_json`` returned
+        ``None`` — so callers/observers can tell a deliberate "everything is relevant"
+        decision apart from a silently-degraded classifier (missing CLI, drifted flags,
+        timeout too short, etc.).
         """
         prompt = role_prompt("classifier", self.settings.orchestrator_root / "prompts")
         prompt += f"\n\nFeature request:\n{feature_request}"
         result = await self.codex.execute_json(prompt, self.settings.workspace_root, CLASSIFIER_SCHEMA, "Classifier")
         if result is None:
-            return sorted(existing)
+            return sorted(existing), "fail_open"
         domains = {"frontend": "frontend", "backend": "backend", "python": "python"}
-        return [project for domain, project in domains.items() if result.get(domain, True) and project in existing]
+        relevant = [project for domain, project in domains.items() if result.get(domain, True) and project in existing]
+        return relevant, "classifier"
 
 
 def _cancelled(runtime: ExecutionRuntime, state: dict[str, Any]) -> bool:
@@ -199,11 +206,13 @@ async def classify_projects(runtime: ExecutionRuntime, state: dict[str, Any]) ->
     override = state.get("target_projects")
     if override is not None:
         relevant = [p for p in override if p in existing]
+        source = "override"
     else:
-        relevant = await runtime.classify_relevant_projects(state["feature_request"], existing)
+        relevant, source = await runtime.classify_relevant_projects(state["feature_request"], existing)
     state["relevant_projects"] = relevant
+    state["relevant_projects_source"] = source
     state["next_action"] = "create_plan"
-    return await runtime.persist(state, "classify_projects", "projects.classified", {"relevant": relevant})
+    return await runtime.persist(state, "classify_projects", "projects.classified", {"relevant": relevant, "source": source})
 
 
 async def create_plan(runtime: ExecutionRuntime, state: dict[str, Any]) -> dict[str, Any]:

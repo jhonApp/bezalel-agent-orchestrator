@@ -7,4 +7,4 @@ Domains:
 - `backend` — Bezalel, .NET 8 C# BFF. API endpoints, business logic, database, auth, cloud/AWS integration.
 - `python` — Workflow-IA, LangGraph pipeline (Python). Topic research, copywriting, visual prompts, carousel generation workflow.
 
-Mark a domain `true` if the feature request plausibly touches it, or if you are unsure. Mark it `false` only when it is clearly irrelevant to the request. When in doubt, include the domain — a domain agent that finds nothing to do is cheaper than missing a domain that needed a change.
+An unnecessary domain agent costs a full Codex session and delays code review until it finishes, so do not mark a domain `true` out of habit. Mark it `false` when the request contains no plausible work for that domain. Only mark it `true` when you genuinely cannot tell whether that domain needs a change — genuine ambiguity, not a reflex.
