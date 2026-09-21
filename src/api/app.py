@@ -14,13 +14,14 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from fastapi import FastAPI, HTTPException
+    from fastapi import FastAPI, HTTPException, Query
     from fastapi.responses import HTMLResponse, StreamingResponse
     from fastapi.staticfiles import StaticFiles
     from pydantic import BaseModel
 except ImportError:  # pragma: no cover - exercised only before optional install
     FastAPI = None
     HTTPException = RuntimeError
+    Query = lambda default=None, **kwargs: default
     HTMLResponse = str
     StreamingResponse = None
     StaticFiles = None
@@ -324,7 +325,7 @@ def create_app(settings: Settings | None = None) -> Any:
         }
 
     @app.get("/quality-data")
-    async def quality_data(limit: int = 200) -> dict[str, Any]:
+    async def quality_data(limit: int = Query(200, ge=1, le=1000)) -> dict[str, Any]:
         """Per-project quality scores plus the prompt-version comparison table."""
         states = await langgraph_states()
         rows = quality_by_execution(states)

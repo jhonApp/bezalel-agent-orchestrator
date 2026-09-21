@@ -128,6 +128,25 @@ def test_build_quality_entry_handles_a_reviewer_result_with_no_quality_object():
     assert entry["axes"]["correta"] == 100
 
 
+def test_build_quality_entry_clamps_out_of_range_and_drops_non_numeric_axes():
+    state = {
+        "plan": [{"agent": "frontend", "project_id": "frontend", "status": "completed",
+                  "result": {"prompt_version": "1.0", "errors": []}}],
+        "test_results": [], "security_findings": [],
+    }
+    agent_result = AgentResult(
+        agent="reviewer", status="completed", summary="ok",
+        quality={"relevante": 150, "fonte_utilizada": -20, "alucinacao": "high", "cumprimento_regras": 95.5},
+    )
+
+    entry = build_quality_entry("frontend", state, agent_result)
+
+    assert entry["axes"]["relevante"] == 100
+    assert entry["axes"]["fonte_utilizada"] == 0
+    assert entry["axes"]["alucinacao"] is None
+    assert entry["axes"]["cumprimento_regras"] == 96
+
+
 def test_quality_by_execution_flattens_and_sorts_newest_first():
     states = {
         "exec-a": {"quality_scores": [{"project_id": "frontend", "computed_at": "2026-01-01T00:00:00+00:00"}]},

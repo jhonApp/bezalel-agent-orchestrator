@@ -857,7 +857,10 @@ class Component extends DCLogic {
   componentDidMount() {
     this.refreshDashboard();
     this.refreshQuality();
-    this._dashboardPoll = setInterval(() => { this.refreshDashboard(); this.refreshQuality(); }, 2000);
+    this._dashboardPoll = setInterval(() => {
+      this.refreshDashboard();
+      if (this.state.view === "quality") this.refreshQuality();
+    }, 2000);
     this.eventSource = new EventSource("/events");
     this.eventSource.addEventListener("orchestration", (message) => {
       const event = JSON.parse(message.data);

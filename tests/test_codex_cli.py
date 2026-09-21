@@ -33,19 +33,28 @@ def test_exec_command_uses_config_override_for_approval_policy(tmp_path: Path):
     assert command[-1] == "-"
 
 
-def test_agent_schema_has_an_optional_quality_object_for_the_reviewer():
+def test_agent_schema_requires_a_nullable_quality_object():
     quality = AGENT_SCHEMA["properties"]["quality"]
     assert AGENT_SCHEMA["additionalProperties"] is False
-    assert "quality" not in AGENT_SCHEMA["required"]
+    # Required-but-nullable (not absent-when-optional) so strict structured-output
+    # validators that reject a required/properties mismatch still accept the schema;
+    # only the reviewer role's prompt actually asks for real values, every other role
+    # is expected to emit `"quality": null`.
+    assert "quality" in AGENT_SCHEMA["required"]
+    assert quality["type"] == ["object", "null"]
     assert quality["additionalProperties"] is False
     assert set(quality["required"]) == {"relevante", "fonte_utilizada", "alucinacao", "cumprimento_regras"}
+    for axis in ("relevante", "fonte_utilizada", "alucinacao", "cumprimento_regras"):
+        assert quality["properties"][axis]["minimum"] == 0
+        assert quality["properties"][axis]["maximum"] == 100
 
 
 def test_agent_schema_is_strict_for_structured_outputs():
     assert AGENT_SCHEMA["additionalProperties"] is False
-    # "quality" is the one deliberately optional property — only the reviewer role
-    # populates it (see prompts/reviewer.md); every other property stays required.
-    assert set(AGENT_SCHEMA["required"]) == set(AGENT_SCHEMA["properties"]) - {"quality"}
+    # Every declared property (including "quality") is required, satisfying strict
+    # structured-output validators; "quality" itself is nullable so non-reviewer roles
+    # can satisfy the requirement with `null` (see test_agent_schema_requires_a_nullable_quality_object).
+    assert set(AGENT_SCHEMA["required"]) == set(AGENT_SCHEMA["properties"])
     assert AGENT_SCHEMA["properties"]["tests"]["items"]["additionalProperties"] is False
     assert AGENT_SCHEMA["properties"]["contracts_changed"]["items"]["additionalProperties"] is False
 
@@ -88,3 +97,13 @@ def test_parse_response_falls_back_to_the_generic_message_with_no_turn_failure_e
 
     assert result.status == "failed"
     assert result.summary == "Codex returned no valid structured result"
+
+
+def test_parse_response_tolerates_a_non_integer_quality_value():
+    raw = '{"status":"completed","summary":"ok","files_changed":[],"tests":[],' \
+          '"contracts_changed":[],"errors":[],"next_action":null,"tokens_input":1,' \
+          '"tokens_output":1,"quality":{"relevante":95.5,"fonte_utilizada":90,"alucinacao":3,"cumprimento_regras":92}}'
+    result = CodexCLI._parse_response(raw, raw)
+
+    assert result.status == "completed"
+    assert result.quality == {"relevante": 95.5, "fonte_utilizada": 90, "alucinacao": 3, "cumprimento_regras": 92}

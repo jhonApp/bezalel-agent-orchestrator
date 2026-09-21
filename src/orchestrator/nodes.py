@@ -452,7 +452,10 @@ async def code_review(runtime: ExecutionRuntime, state: dict[str, Any]) -> dict[
             )
         else:
             async def _record_quality(project_id: str, agent_result: AgentResult) -> None:
-                state.setdefault("quality_scores", []).append(build_quality_entry(project_id, state, agent_result))
+                try:
+                    state.setdefault("quality_scores", []).append(build_quality_entry(project_id, state, agent_result))
+                except Exception as exc:
+                    state.setdefault("errors", []).append(f"quality scoring {project_id}: {exc}")
 
             agent = await _run_gate_agent_across_projects(runtime, state, task, changed_projects, on_project_result=_record_quality)
         result = ReviewResult(status="approved" if agent.status == "completed" else "changes_requested", summary=agent.summary,

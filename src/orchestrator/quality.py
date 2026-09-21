@@ -62,6 +62,16 @@ def blend_quality_score(axes: dict[str, int | None]) -> float | None:
     return round(sum(values) / len(values), 1)
 
 
+def _sanitize_axis(value: Any) -> int | None:
+    """The reviewer's quality object is untrusted model output — coerce a real 0-100
+    number, or drop anything else (a string, a bool, an out-of-range value) as unscored
+    rather than let it corrupt the blended score.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return max(0, min(100, int(round(value))))
+
+
 def build_quality_entry(project_id: str, state: dict[str, Any], agent_result: AgentResult) -> dict[str, Any]:
     """One quality_scores entry for a project the reviewer just examined: heuristic axes
     (tests/security/parse) blended with the reviewer's own LLM judgement (relevante/
@@ -72,11 +82,11 @@ def build_quality_entry(project_id: str, state: dict[str, Any], agent_result: Ag
     quality = agent_result.quality or {}
     axes = {
         "correta": heuristic_correta(project_id, state),
-        "relevante": quality.get("relevante"),
-        "fonte_utilizada": quality.get("fonte_utilizada"),
-        "alucinacao": quality.get("alucinacao"),
+        "relevante": _sanitize_axis(quality.get("relevante")),
+        "fonte_utilizada": _sanitize_axis(quality.get("fonte_utilizada")),
+        "alucinacao": _sanitize_axis(quality.get("alucinacao")),
         "formato_valido": heuristic_formato_valido(project_id, state),
-        "cumprimento_regras": quality.get("cumprimento_regras"),
+        "cumprimento_regras": _sanitize_axis(quality.get("cumprimento_regras")),
         "seguranca": heuristic_seguranca(project_id, state),
     }
     return {

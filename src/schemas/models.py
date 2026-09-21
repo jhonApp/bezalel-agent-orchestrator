@@ -73,7 +73,7 @@ class AgentResult(BaseModel):
     duration_seconds: float = 0.0
     estimated_cost: float = 0.0
     raw_response: str = ""
-    quality: dict[str, int] | None = None
+    quality: dict[str, Any] | None = None
 
 
 class ContractFinding(BaseModel):

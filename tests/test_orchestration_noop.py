@@ -473,6 +473,34 @@ async def test_code_review_records_a_quality_score_per_reviewed_project(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_code_review_does_not_abort_when_quality_scoring_raises(monkeypatch):
+    async def two_changed_projects(runtime, state):
+        return ["frontend", "backend"]
+
+    monkeypatch.setattr(nodes, "_changed_project_ids", two_changed_projects)
+
+    def exploding_build_quality_entry(project_id, state, agent_result):
+        raise ValueError(f"boom for {project_id}")
+
+    monkeypatch.setattr(nodes, "build_quality_entry", exploding_build_quality_entry)
+    runtime = RecordingRuntime()
+    state = {
+        "plan": [{"task_id": "T013", "agent": "reviewer", "status": "pending", "description": "review the diff"}],
+        "approvals": {}, "worktrees": {}, "errors": [],
+    }
+
+    result = await nodes.code_review(runtime, state)
+
+    # Both projects still got reviewed (the exception in quality-scoring didn't abort the loop);
+    # the review's own status/results are unaffected by the quality-scoring failure.
+    assert runtime.calls == ["frontend", "backend"]
+    assert result["review_results"][0]["status"] in ("approved", "changes_requested")
+    assert any("quality scoring frontend" in e for e in result["errors"])
+    assert any("quality scoring backend" in e for e in result["errors"])
+    assert result.get("quality_scores", []) == []
+
+
+@pytest.mark.asyncio
 async def test_run_contract_validation_does_not_record_quality_scores(monkeypatch):
     """Regression: only the reviewer's pass records quality — contracts is a different
     gate agent and must not gain this side effect."""
