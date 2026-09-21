@@ -1,16 +1,18 @@
 from __future__ import annotations
 
+import asyncio
 import sys
 from pathlib import Path
 
 import pytest
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
+from agents.registry import AGENT_ROLES
 from orchestrator import nodes
 from orchestrator.config import Settings
 from orchestrator.graph import OrchestrationGraph
 from orchestrator.nodes import ExecutionRuntime
-from schemas.models import AgentResult
+from schemas.models import AgentResult, SecurityFinding
 
 
 class NoAgentRuntime:
@@ -347,3 +349,171 @@ async def test_run_task_publishes_agent_stream_events(tmp_path: Path):
     assert first["agent"] == "frontend"
     assert first["task_id"] == "T001"
     assert first["parsed"] == {"kind": "tool_call", "tool": "apply_patch"}
+
+
+@pytest.mark.asyncio
+async def test_security_review_tags_each_finding_with_its_project_id(monkeypatch):
+    async def fake_changed_paths(runtime, state, project_id):
+        return ["src/config.py"] if project_id == "frontend" else ["appsettings.json"]
+
+    def fake_scan_project(project, paths):
+        return [SecurityFinding(severity="blocking", path=paths[0], message="looks like a secret")]
+
+    monkeypatch.setattr(nodes, "_changed_paths", fake_changed_paths)
+    monkeypatch.setattr(nodes, "scan_project", fake_scan_project)
+
+    class StubRuntime:
+        def workdir_for(self, state, project_id):
+            return Path(".")
+
+        async def persist(self, state, node, event=None, payload=None):
+            return state
+
+    state = {
+        "detected_projects": [
+            {"project_id": "frontend", "exists": True},
+            {"project_id": "backend", "exists": True},
+        ],
+        "plan": [],
+    }
+
+    result = await nodes.security_review(StubRuntime(), state)
+
+    findings = result["security_findings"]
+    assert {f["project_id"] for f in findings} == {"frontend", "backend"}
+
+
+def test_execution_state_model_defaults_quality_scores_to_an_empty_list():
+    from schemas.models import ExecutionStateModel
+
+    model = ExecutionStateModel(execution_id="exec-1", project_id="bezalel", feature_request="add a button")
+
+    assert model.quality_scores == []
+
+
+class StampRuntime:
+    """Minimal runtime double — just enough surface for dispatch_agents to run one task."""
+
+    def __init__(self) -> None:
+        self.store = _StampStore()
+
+    def cancel_event(self, execution_id):
+        return asyncio.Event()
+
+    async def prepare_worktree(self, state, project_id):
+        return state
+
+    def workdir_for(self, state, project_id):
+        return Path(".")
+
+    async def run_task(self, state, task):
+        return AgentResult(agent=task["agent"], status="completed", summary="done")
+
+    async def publish(self, event):
+        return None
+
+    async def persist(self, state, node, event=None, payload=None):
+        return state
+
+
+class _StampStore:
+    def event(self, *args, **kwargs):
+        return None
+
+    def agent_run(self, *args, **kwargs):
+        return None
+
+
+@pytest.mark.asyncio
+async def test_dispatch_agents_stamps_the_current_prompt_version_onto_the_result():
+    state = {
+        "execution_id": "execution-t007",
+        "plan": [{"task_id": "T001", "agent": "frontend", "project_id": "frontend",
+                  "status": "pending", "dependencies": [], "description": "add a button"}],
+        "approvals": {}, "worktrees": {}, "token_usage": {}, "estimated_cost": 0.0,
+    }
+
+    result = await nodes.dispatch_agents(StampRuntime(), state)
+
+    task = result["plan"][0]
+    assert task["result"]["prompt_version"] == AGENT_ROLES["frontend"]["prompt_version"]
+
+
+@pytest.mark.asyncio
+async def test_code_review_records_a_quality_score_per_reviewed_project(monkeypatch):
+    async def two_changed_projects(runtime, state):
+        return ["frontend", "backend"]
+
+    monkeypatch.setattr(nodes, "_changed_project_ids", two_changed_projects)
+    runtime = RecordingRuntime()
+    state = {
+        "plan": [
+            {"task_id": "T001", "agent": "frontend", "project_id": "frontend", "status": "completed",
+             "result": {"prompt_version": "1.2", "estimated_cost": 0.01, "duration_seconds": 12.0, "errors": []}},
+            {"task_id": "T002", "agent": "backend", "project_id": "backend", "status": "completed",
+             "result": {"prompt_version": "2.0", "estimated_cost": 0.02, "duration_seconds": 20.0, "errors": []}},
+            {"task_id": "T013", "agent": "reviewer", "status": "pending", "description": "review the diff"},
+        ],
+        "approvals": {}, "worktrees": {}, "test_results": [], "security_findings": [],
+    }
+
+    result = await nodes.code_review(runtime, state)
+
+    scores = result["quality_scores"]
+    assert {s["project_id"] for s in scores} == {"frontend", "backend"}
+    frontend = next(s for s in scores if s["project_id"] == "frontend")
+    assert frontend["agent"] == "frontend"
+    assert frontend["prompt_version"] == "1.2"
+    assert frontend["axes"]["correta"] == 100
+    assert frontend["axes"]["formato_valido"] == 100
+    assert frontend["axes"]["seguranca"] == 100
+    # RecordingRuntime's AgentResult carries no `.quality`, so the LLM axes stay unscored.
+    assert frontend["axes"]["relevante"] is None
+    assert frontend["quality_score"] is not None
+
+
+@pytest.mark.asyncio
+async def test_code_review_does_not_abort_when_quality_scoring_raises(monkeypatch):
+    async def two_changed_projects(runtime, state):
+        return ["frontend", "backend"]
+
+    monkeypatch.setattr(nodes, "_changed_project_ids", two_changed_projects)
+
+    def exploding_build_quality_entry(project_id, state, agent_result):
+        raise ValueError(f"boom for {project_id}")
+
+    monkeypatch.setattr(nodes, "build_quality_entry", exploding_build_quality_entry)
+    runtime = RecordingRuntime()
+    state = {
+        "plan": [{"task_id": "T013", "agent": "reviewer", "status": "pending", "description": "review the diff"}],
+        "approvals": {}, "worktrees": {}, "errors": [],
+    }
+
+    result = await nodes.code_review(runtime, state)
+
+    # Both projects still got reviewed (the exception in quality-scoring didn't abort the loop);
+    # the review's own status/results are unaffected by the quality-scoring failure.
+    assert runtime.calls == ["frontend", "backend"]
+    assert result["review_results"][0]["status"] in ("approved", "changes_requested")
+    assert any("quality scoring frontend" in e for e in result["errors"])
+    assert any("quality scoring backend" in e for e in result["errors"])
+    assert result.get("quality_scores", []) == []
+
+
+@pytest.mark.asyncio
+async def test_run_contract_validation_does_not_record_quality_scores(monkeypatch):
+    """Regression: only the reviewer's pass records quality — contracts is a different
+    gate agent and must not gain this side effect."""
+    async def two_changed_projects(runtime, state):
+        return ["frontend", "backend"]
+
+    monkeypatch.setattr(nodes, "_changed_project_ids", two_changed_projects)
+    runtime = RecordingRuntime()
+    state = {
+        "plan": [{"task_id": "T010", "agent": "contracts", "status": "pending", "description": "validate contracts"}],
+        "contracts": [], "approvals": {}, "worktrees": {},
+    }
+
+    result = await nodes.run_contract_validation(runtime, state)
+
+    assert result.get("quality_scores", []) == []
