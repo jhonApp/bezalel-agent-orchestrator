@@ -208,7 +208,7 @@ async def classify_projects(runtime: ExecutionRuntime, state: dict[str, Any]) ->
 
 async def create_plan(runtime: ExecutionRuntime, state: dict[str, Any]) -> dict[str, Any]:
     existing = {p["project_id"] for p in state.get("detected_projects", []) if p.get("exists")}
-    relevant = state.get("relevant_projects") or existing
+    relevant = existing if state.get("relevant_projects") is None else state["relevant_projects"]
     tasks: list[TaskSpec] = []
     for number, (role, project, description) in enumerate([
         ("frontend", "frontend", "Implement the frontend portion of the feature using the detected stack and design system."),

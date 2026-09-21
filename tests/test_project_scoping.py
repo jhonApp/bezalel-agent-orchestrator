@@ -196,3 +196,21 @@ def test_create_plan_falls_back_to_existing_when_relevant_projects_is_absent():
 
     domain_tasks = [t for t in result["plan"] if t["agent"] in ("frontend", "backend", "python_ai")]
     assert [t["agent"] for t in domain_tasks] == ["frontend"]
+
+
+def test_create_plan_honors_a_deliberate_empty_relevant_projects_list():
+    """relevant_projects=[] is a real decision (classifier found nothing relevant, or an
+    explicit target_projects=[] override) — it must not be treated the same as the key
+    being absent entirely."""
+    state = {
+        "detected_projects": [
+            {"project_id": "frontend", "exists": True},
+            {"project_id": "backend", "exists": True},
+        ],
+        "relevant_projects": [],
+    }
+
+    result = asyncio.run(nodes.create_plan(StubPersistRuntime(), state))
+
+    domain_tasks = [t for t in result["plan"] if t["agent"] in ("frontend", "backend", "python_ai")]
+    assert domain_tasks == []
