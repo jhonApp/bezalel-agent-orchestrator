@@ -89,3 +89,32 @@ def build_quality_entry(project_id: str, state: dict[str, Any], agent_result: Ag
         "duration_seconds": result.get("duration_seconds", 0.0),
         "computed_at": utc_now(),
     }
+
+
+def quality_by_execution(states: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    rows = []
+    for execution_id, state in states.items():
+        for entry in state.get("quality_scores", []):
+            rows.append({"execution_id": execution_id, **entry})
+    rows.sort(key=lambda r: r.get("computed_at", ""), reverse=True)
+    return rows
+
+
+def quality_by_version(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    grouped: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for row in rows:
+        agent, version = row.get("agent"), row.get("prompt_version")
+        if not agent or not version:
+            continue
+        grouped.setdefault((agent, version), []).append(row)
+    result = []
+    for (agent, version), items in grouped.items():
+        scores = [r["quality_score"] for r in items if r.get("quality_score") is not None]
+        result.append({
+            "agent": agent, "prompt_version": version, "runs": len(items),
+            "avg_quality": round(sum(scores) / len(scores), 1) if scores else None,
+            "avg_cost_usd": round(sum(r.get("estimated_cost", 0.0) for r in items) / len(items), 6),
+            "avg_duration_seconds": round(sum(r.get("duration_seconds", 0.0) for r in items) / len(items), 1),
+        })
+    result.sort(key=lambda item: (item["agent"], item["prompt_version"]))
+    return result

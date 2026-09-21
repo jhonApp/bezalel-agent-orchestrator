@@ -6,6 +6,8 @@ from orchestrator.quality import (
     heuristic_correta,
     heuristic_formato_valido,
     heuristic_seguranca,
+    quality_by_execution,
+    quality_by_version,
 )
 from schemas.models import AgentResult
 
@@ -124,3 +126,38 @@ def test_build_quality_entry_handles_a_reviewer_result_with_no_quality_object():
 
     assert entry["axes"]["relevante"] is None
     assert entry["axes"]["correta"] == 100
+
+
+def test_quality_by_execution_flattens_and_sorts_newest_first():
+    states = {
+        "exec-a": {"quality_scores": [{"project_id": "frontend", "computed_at": "2026-01-01T00:00:00+00:00"}]},
+        "exec-b": {"quality_scores": [{"project_id": "backend", "computed_at": "2026-02-01T00:00:00+00:00"}]},
+    }
+
+    rows = quality_by_execution(states)
+
+    assert [r["execution_id"] for r in rows] == ["exec-b", "exec-a"]
+
+
+def test_quality_by_version_averages_and_groups_by_agent_and_version():
+    rows = [
+        {"agent": "frontend", "prompt_version": "1.7", "quality_score": 84.0, "estimated_cost": 0.02, "duration_seconds": 30.0},
+        {"agent": "frontend", "prompt_version": "1.8", "quality_score": 91.0, "estimated_cost": 0.0208, "duration_seconds": 27.6},
+        {"agent": "frontend", "prompt_version": "1.8", "quality_score": 89.0, "estimated_cost": 0.0212, "duration_seconds": 28.4},
+    ]
+
+    result = quality_by_version(rows)
+
+    by_version = {item["prompt_version"]: item for item in result}
+    assert by_version["1.7"]["runs"] == 1
+    assert by_version["1.7"]["avg_quality"] == 84.0
+    assert by_version["1.8"]["runs"] == 2
+    assert by_version["1.8"]["avg_quality"] == 90.0
+    assert by_version["1.8"]["avg_cost_usd"] == 0.021
+    assert by_version["1.8"]["avg_duration_seconds"] == 28.0
+    assert [item["prompt_version"] for item in result] == ["1.7", "1.8"]
+
+
+def test_quality_by_version_skips_rows_missing_agent_or_version():
+    rows = [{"agent": None, "prompt_version": "1.0", "quality_score": 50.0}]
+    assert quality_by_version(rows) == []
