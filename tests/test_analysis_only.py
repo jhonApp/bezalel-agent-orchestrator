@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import subprocess
 import sys
 from collections.abc import AsyncIterator
@@ -44,12 +45,16 @@ def test_run_cli_accepts_analysis_only() -> None:
 def test_module_cli_help_works_from_repository_root() -> None:
     repository_root = Path(__file__).resolve().parents[1]
 
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(repository_root / "src")
+
     result = subprocess.run(
         [sys.executable, "-m", "orchestrator", "run", "--help"],
         cwd=repository_root,
         capture_output=True,
         text=True,
         check=False,
+        env=env,
     )
 
     assert result.returncode == 0, result.stderr
