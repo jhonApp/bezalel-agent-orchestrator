@@ -1,6 +1,6 @@
 # Bezalel project discovery
 
-Generated: 2026-09-19T13:45:07.041297
+Generated: 2026-09-21T06:57:42.205716
 
 Expected aliases `bezalel-frontend`, `bezalel-backend`, and `bezalel-python` were resolved through configured paths and existing candidates.
 

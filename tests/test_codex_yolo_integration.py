@@ -127,6 +127,49 @@ async def test_execute_streams_events_while_process_is_running(tmp_path: Path):
     assert all(event.get("parsed") is None for event in collected if "plain progress line" in event["raw"])
 
 
+FAKE_CODEX_OVERSIZED_LINE = r'''
+import json
+import pathlib
+import sys
+
+output = pathlib.Path(sys.argv[sys.argv.index("--output-last-message") + 1])
+print(json.dumps({"kind": "before"}), flush=True)
+print("Y" * 300, flush=True)
+print(json.dumps({"kind": "after"}), flush=True)
+output.write_text(json.dumps({
+    "status": "completed", "summary": "survived an oversized line",
+    "files_changed": [], "tests": [], "contracts_changed": [],
+    "errors": [], "next_action": None, "tokens_input": 1, "tokens_output": 1,
+}), encoding="utf-8")
+sys.exit(0)
+'''
+
+
+@pytest.mark.asyncio
+async def test_execute_survives_a_stream_line_longer_than_the_reader_limit(tmp_path: Path):
+    """A single Codex --json line can legitimately exceed asyncio's default 64 KiB
+    StreamReader limit (a tool result embedding several files' content, e.g.). Before this
+    fix, that raised asyncio.LimitOverrunError out of readline() and crashed the whole agent
+    task with "Separator is not found, and chunk exceed the limit" — one oversized line must
+    not take down agents that have nothing to do with it."""
+    script = tmp_path / "fake_codex_oversized.py"
+    script.write_text(FAKE_CODEX_OVERSIZED_LINE, encoding="utf-8")
+    settings = settings_for(tmp_path, f'"{sys.executable}" "{script}"')
+    settings = settings.model_copy(update={"codex_stream_limit": 100})
+
+    collected: list[dict] = []
+
+    async def on_event(event: dict) -> None:
+        collected.append(event)
+
+    result = await CodexCLI(settings).execute("exercise", tmp_path, "frontend", on_event=on_event)
+
+    assert result.status == "completed"
+    assert result.summary == "survived an oversized line"
+    parsed_kinds = [event["parsed"]["kind"] for event in collected if event.get("parsed")]
+    assert parsed_kinds == ["before", "after"], "pump must resync and keep delivering events after the oversized one"
+
+
 @pytest.mark.asyncio
 async def test_execute_redacts_secrets_in_streamed_lines(tmp_path: Path):
     script = tmp_path / "fake_codex_secret.py"

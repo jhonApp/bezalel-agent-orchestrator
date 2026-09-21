@@ -17,6 +17,7 @@ class ExecutionState(TypedDict, total=False):
     files_changed: list[str]
     commits: list[dict[str, Any]]
     merges: list[dict[str, Any]]
+    pull_requests: list[dict[str, Any]]
     test_results: list[dict[str, Any]]
     security_findings: list[dict[str, Any]]
     security_blocking: bool

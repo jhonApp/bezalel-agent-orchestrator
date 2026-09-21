@@ -18,6 +18,8 @@ def gates_pass(state: dict[str, Any]) -> tuple[bool, list[str]]:
     reasons: list[str] = []
     if any(t.get("status") == "failed" for t in state.get("plan", [])):
         reasons.append("one or more tasks failed")
+    if any(t.get("status") == "rate_limited" for t in state.get("plan", [])):
+        reasons.append("one or more tasks hit the Codex usage limit and never ran")
     if any(c.get("severity") == "blocking" for c in state.get("contracts", [])):
         reasons.append("blocking contract finding")
     if any(t.get("blocking") or t.get("status") == "failed" for t in state.get("test_results", [])):

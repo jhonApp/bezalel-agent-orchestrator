@@ -52,7 +52,7 @@ class TaskSpec(BaseModel):
     description: str
     dependencies: list[str] = Field(default_factory=list)
     acceptance_criteria: list[str] = Field(default_factory=list)
-    status: Literal["pending", "running", "completed", "failed", "blocked", "skipped"] = "pending"
+    status: Literal["pending", "running", "completed", "failed", "blocked", "skipped", "rate_limited"] = "pending"
     attempts: int = 0
     worktree: str | None = None
     branch: str | None = None
@@ -61,7 +61,7 @@ class TaskSpec(BaseModel):
 
 class AgentResult(BaseModel):
     agent: str
-    status: Literal["completed", "failed", "blocked", "skipped"]
+    status: Literal["completed", "failed", "blocked", "skipped", "rate_limited"]
     summary: str = ""
     files_changed: list[str] = Field(default_factory=list)
     tests: list[dict[str, Any]] = Field(default_factory=list)
@@ -157,6 +157,7 @@ class ExecutionStateModel(BaseModel):
     contracts: list[ContractFinding] = Field(default_factory=list)
     files_changed: list[str] = Field(default_factory=list)
     commits: list[dict[str, Any]] = Field(default_factory=list)
+    pull_requests: list[dict[str, Any]] = Field(default_factory=list)
     test_results: list[TestResult] = Field(default_factory=list)
     review_results: list[ReviewResult] = Field(default_factory=list)
     deploy_results: list[DeployResult] = Field(default_factory=list)

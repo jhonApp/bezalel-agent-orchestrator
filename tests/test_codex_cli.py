@@ -38,3 +38,43 @@ def test_agent_schema_is_strict_for_structured_outputs():
     assert set(AGENT_SCHEMA["required"]) == set(AGENT_SCHEMA["properties"])
     assert AGENT_SCHEMA["properties"]["tests"]["items"]["additionalProperties"] is False
     assert AGENT_SCHEMA["properties"]["contracts_changed"]["items"]["additionalProperties"] is False
+
+
+USAGE_LIMIT_RAW = (
+    '{"type":"thread.started","thread_id":"01a0babc-af46-7192-870f-7f0e01cf2cac"}\n'
+    '{"type":"turn.started"}\n'
+    '{"type":"error","message":"You’ve hit your usage limit. Upgrade to Pro '
+    '(https://chatgpt.com/explore/pro), visit https://chatgpt.com/codex/settings/usage '
+    'to purchase more credits or try again at 5:57 PM."}\n'
+    '{"type":"turn.failed","error":{"message":"You’ve hit your usage limit. Upgrade to Pro '
+    '(https://chatgpt.com/explore/pro), visit https://chatgpt.com/codex/settings/usage '
+    'to purchase more credits or try again at 5:57 PM."}}\n'
+)
+
+GENERIC_TURN_FAILURE_RAW = (
+    '{"type":"thread.started","thread_id":"x"}\n'
+    '{"type":"turn.started"}\n'
+    '{"type":"turn.failed","error":{"message":"network error contacting model provider"}}\n'
+)
+
+
+def test_parse_response_flags_a_usage_limit_turn_failure_as_rate_limited():
+    result = CodexCLI._parse_response(USAGE_LIMIT_RAW, USAGE_LIMIT_RAW)
+
+    assert result.status == "rate_limited"
+    assert "usage limit" in result.summary.lower()
+    assert result.errors and "usage limit" in result.errors[0].lower()
+
+
+def test_parse_response_surfaces_the_real_reason_for_a_non_usage_turn_failure():
+    result = CodexCLI._parse_response(GENERIC_TURN_FAILURE_RAW, GENERIC_TURN_FAILURE_RAW)
+
+    assert result.status == "failed"
+    assert "network error contacting model provider" in result.summary
+
+
+def test_parse_response_falls_back_to_the_generic_message_with_no_turn_failure_event():
+    result = CodexCLI._parse_response("not json at all", "not json at all")
+
+    assert result.status == "failed"
+    assert result.summary == "Codex returned no valid structured result"

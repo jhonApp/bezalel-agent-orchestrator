@@ -80,6 +80,24 @@
       </div>
     </sc-if>
 
+    <!-- Commit realizado / PR aberto — falta só o push manual para main -->
+    <sc-if value="{{ prPopupOpen }}" hint-placeholder-val="{{ false }}">
+      <div onClick="{{ onClosePrPopup }}" style="position:fixed; inset:0; background:rgba(20,20,15,0.55); z-index:66;"></div>
+      <div style="position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); width:400px; max-width:90vw; background:#EDEAE1; border:2px solid #2FA98C; z-index:67; padding:22px;">
+        <div style="display:flex; align-items:center; gap:8px; margin-bottom:10px;">
+          <span style="font-size:16px;">✓</span>
+          <span style="font-size:13px; font-weight:800; text-transform:uppercase; letter-spacing:0.04em; color:#2FA98C;">Commit realizado</span>
+        </div>
+        <div style="font-size:12.5px; line-height:1.5; margin-bottom:6px;">{{ prPopupFeature }}</div>
+        <div style="font-size:10.5px; color:#5A564C; text-transform:uppercase; letter-spacing:0.03em; margin-bottom:16px;">{{ prPopupProject }} · {{ prPopupBranch }} · {{ prPopupSha }}</div>
+        <div style="font-size:11.5px; line-height:1.5; margin-bottom:18px;">Branch enviada e pull request aberto. Falta só o merge para main, que fica a seu critério.</div>
+        <div style="display:flex; gap:8px; justify-content:flex-end;">
+          <button onClick="{{ onClosePrPopup }}" style="font-size:10.5px; font-weight:700; text-transform:uppercase; letter-spacing:0.04em; padding:9px 14px; border:1px solid #14140F; background:#fff; color:#14140F; cursor:pointer;">Fechar</button>
+          <a href="{{ prPopupUrl }}" target="_blank" rel="noopener noreferrer" style="font-size:10.5px; font-weight:700; text-transform:uppercase; letter-spacing:0.04em; padding:9px 14px; border:1px solid #2FA98C; background:#2FA98C; color:#fff; cursor:pointer; text-decoration:none;">Ver PR →</a>
+        </div>
+      </div>
+    </sc-if>
+
     <!-- Falhas / alertas — painel dedicado -->
     <sc-if value="{{ failuresPanelOpen }}" hint-placeholder-val="{{ false }}">
       <div onClick="{{ onCloseFailuresPanel }}" style="position:fixed; inset:0; background:rgba(20,20,15,0.5); z-index:54;"></div>
@@ -227,7 +245,7 @@
                   <span style="width:6px; height:6px; background:{{ a.statusColor }}; display:inline-block;"></span>{{ a.statusLabel }}
                 </span>
                 <sc-if value="{{ a.hasLiveLine }}" hint-placeholder-val="{{ false }}">
-                  <div title="{{ a.liveLine }}" style="font-size:10px; color:#5A564C; margin-top:8px; font-family:'SFMono-Regular',Consolas,monospace; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">▸ {{ a.liveLine }}</div>
+                  <div title="{{ a.liveLine }}" style="font-size:10px; color:{{ a.liveLineColor }}; margin-top:8px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">▸ {{ a.liveLine }}</div>
                 </sc-if>
               </div>
             </div>
@@ -285,9 +303,14 @@
               <div style="font-size:10px; text-transform:uppercase; letter-spacing:0.08em; color:#5A564C; margin-bottom:8px; border-bottom:1px solid #14140F; padding-bottom:4px;">Atividade ao vivo</div>
               <div style="display:flex; flex-direction:column; gap:4px; max-height:220px; overflow-y:auto;">
                 <sc-for list="{{ selectedAgent.liveFeed }}" as="ln" hint-placeholder-count="3">
-                  <div style="display:flex; gap:8px; padding:5px 7px; background:#F6F4EC; border:1px solid #DEDACD; font-family:'SFMono-Regular',Consolas,monospace; font-size:10.5px;">
-                    <span style="color:#5A564C; white-space:nowrap;">{{ ln.time }}</span>
-                    <span style="word-break:break-word;">{{ ln.text }}</span>
+                  <div style="display:flex; gap:8px; padding:5px 7px; background:#F6F4EC; border:1px solid #DEDACD; font-size:10.5px;">
+                    <span style="color:#5A564C; white-space:nowrap; font-family:'SFMono-Regular',Consolas,monospace;">{{ ln.time }}</span>
+                    <span style="word-break:break-word; color:{{ ln.color }}; font-family:{{ ln.fontFamily }}; flex:1;">
+                      {{ ln.text }}
+                      <sc-if value="{{ ln.isLong }}" hint-placeholder-val="{{ false }}">
+                        <button onClick="{{ ln.onToggle }}" style="background:none; border:none; color:#35C7B9; cursor:pointer; font-size:10px; text-decoration:underline; padding:0; margin-left:6px; font-family:inherit;">{{ ln.toggleLabel }}</button>
+                      </sc-if>
+                    </span>
                   </div>
                 </sc-for>
               </div>
@@ -703,6 +726,54 @@ class Component extends DCLogic {
     return { score: Math.max(0, Math.min(100, Math.round(score))), reasons: ch.reasons || [] };
   }
 
+  static nextStreamLineId() {
+    Component._streamLineSeq = (Component._streamLineSeq || 0) + 1;
+    return Component._streamLineSeq;
+  }
+
+  // Codex --json emits a fixed set of item/turn/thread event shapes on stdout — this renders
+  // the common ones as a short human line instead of the raw JSONL, falling back to the raw
+  // text untouched for anything unrecognized (a plain progress line, a future event shape).
+  static shortenCommand(command) {
+    // Unwraps the PowerShell invocation wrapper (`"...\powershell.exe" -Command '...'`) down
+    // to the actual command text. Length is NOT cut here — the feed truncates for display and
+    // offers a "mostrar mais" toggle instead, so the full text is never thrown away.
+    if (!command) return "";
+    const match = command.match(/-Command\s+['"]?(.+?)['"]?$/);
+    return match ? match[1] : command;
+  }
+
+  static formatStreamEvent(parsed, raw) {
+    if (!parsed || typeof parsed !== "object") return { text: raw, kind: "raw" };
+    const type = parsed.type;
+    if (type === "thread.started") return { text: "Sessão iniciada", kind: "system" };
+    if (type === "turn.started") return { text: "Processando...", kind: "system" };
+    if (type === "turn.completed") {
+      const usage = parsed.usage || {};
+      const total = (usage.input_tokens || 0) + (usage.output_tokens || 0);
+      return { text: "Turno concluído" + (total ? " (" + total.toLocaleString("pt-BR") + " tokens)" : ""), kind: "system" };
+    }
+    const item = parsed.item;
+    if (item && (type === "item.started" || type === "item.completed")) {
+      if (item.type === "agent_message") {
+        return { text: (item.text || "").trim() || "(mensagem vazia)", kind: "message" };
+      }
+      if (item.type === "command_execution") {
+        const cmd = Component.shortenCommand(item.command || "");
+        if (type === "item.started" || item.status === "in_progress") {
+          return { text: "▶ " + cmd, kind: "command" };
+        }
+        const ok = item.exit_code === 0;
+        return { text: (ok ? "✓ " : "✗ ") + cmd, kind: ok ? "command-ok" : "command-fail" };
+      }
+      if (item.type === "reasoning") {
+        return { text: (item.text || "raciocinando...").trim(), kind: "reasoning" };
+      }
+      return { text: (item.type || type) + (item.text ? ": " + item.text : ""), kind: "other" };
+    }
+    return { text: raw, kind: "raw" };
+  }
+
   state = {
     view: "dashboard",
     selectedAgentKey: null,
@@ -712,8 +783,10 @@ class Component extends DCLogic {
     skillBusy: false,
     skillModalProject: null,
     removeConfirm: null,
+    prPopup: null,
     toastKind: "info",
     failuresPanelOpen: false,
+    expandedLines: {},
     mcpIncidentOpen: true,
     mcps: Component.MCP_DEFS.map(function (m) { return Object.assign({}, m); }),
     execFilter: "all",
@@ -754,12 +827,15 @@ class Component extends DCLogic {
       } else if (event.type === "agent.stream") {
         const raw = (event.raw || "").trim();
         if (raw) {
-          const time = new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-          this.setState((s) => {
-            const previous = s.agentActivity[event.agent] || { feed: [] };
-            const feed = [{ time: time, text: raw }].concat(previous.feed).slice(0, 30);
-            return { agentActivity: Object.assign({}, s.agentActivity, { [event.agent]: Object.assign({}, previous, { feed: feed, lastLine: raw }) }) };
-          });
+          const formatted = Component.formatStreamEvent(event.parsed, raw);
+          if (formatted.text) {
+            const time = new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+            this.setState((s) => {
+              const previous = s.agentActivity[event.agent] || { feed: [] };
+              const feed = [{ time: time, text: formatted.text, kind: formatted.kind, id: Component.nextStreamLineId() }].concat(previous.feed).slice(0, 30);
+              return { agentActivity: Object.assign({}, s.agentActivity, { [event.agent]: Object.assign({}, previous, { feed: feed, lastLine: formatted.text, lastLineKind: formatted.kind }) }) };
+            });
+          }
         }
       } else if (event.type === "state.updated") {
         if (event.event === "execution.completed") {
@@ -806,7 +882,8 @@ class Component extends DCLogic {
         const agents = Component.AGENT_DEFS.map((agent) => {
           const metric = metrics[agent.key];
           const latestStatus = latestStatusByAgent[agent.key];
-          const statusKey = (latestStatus === "failed" || latestStatus === "blocked") ? "attention" : "idle";
+          const statusKey = latestStatus === "rate_limited" ? "rate_limited"
+            : (latestStatus === "failed" || latestStatus === "blocked") ? "attention" : "idle";
           const health = Component.computeAgentHealth(latestContextHealthByAgent[agent.key]);
           if (!metric) return Object.assign({}, agent, {
             execCount: 0,
@@ -840,13 +917,29 @@ class Component extends DCLogic {
           errors: item.errors || [],
           securityFindings: item.security_findings || [],
           contractFindings: item.contract_findings || [],
+          commits: item.commits || [],
+          pullRequests: item.pull_requests || [],
           updatedAtRaw: item.updated_at,
           failReason: (item.errors || []).join("; ") || (item.context_health.reasons || []).join("; ") || "Execução não concluída.",
         }));
+        this._seenPRs = this._seenPRs || new Set();
+        let newPrPopup = null;
+        executions.forEach((exec) => {
+          (exec.pullRequests || []).forEach((pr) => {
+            if (!pr.url || this._seenPRs.has(pr.url)) return;
+            this._seenPRs.add(pr.url);
+            const commit = (exec.commits || []).find((c) => c.project_id === pr.project_id) || {};
+            newPrPopup = {
+              feature: exec.feature, project: pr.project_id, branch: pr.branch,
+              sha: commit.sha ? commit.sha.slice(0, 7) : "", url: pr.url,
+            };
+          });
+        });
         const activeAgents = Object.fromEntries((data.active_agents || []).map((item) => [item.agent, { statusKey: "running" }]));
         this.setState((s) => ({
           liveData: { agents: agents, executions: executions, summary: data.executions, usage: data.usage },
           liveAgents: activeAgents,
+          prPopup: newPrPopup || s.prPopup,
         }));
       })
       .catch(() => this.showToast("Dados reais indisponíveis; exibindo último snapshot.", 2600, "error"));
@@ -881,6 +974,14 @@ class Component extends DCLogic {
         this.setState((s) => ({ skillsLoading: Object.assign({}, s.skillsLoading, { [projectId]: false }) }));
         this.showToast("Não foi possível carregar as skills deste projeto.", 6000, "error");
       });
+  }
+
+  toggleLineExpand(lineId) {
+    this.setState((s) => ({ expandedLines: Object.assign({}, s.expandedLines, { [lineId]: !s.expandedLines[lineId] }) }));
+  }
+
+  closePrPopup() {
+    this.setState({ prPopup: null });
   }
 
   openFailuresPanel() {
@@ -972,6 +1073,14 @@ class Component extends DCLogic {
     const executionDefs = this.state.liveData ? this.state.liveData.executions : Component.EXECUTION_DEFS;
     const totalMin = agentDefs.reduce(function (s, a) { return s + a.totalMin; }, 0);
     const liveAgents = this.state.liveAgents;
+    const streamKindStyle = function (kind) {
+      if (kind === "message") return { color: "#14140F", mono: false };
+      if (kind === "reasoning") return { color: "#5A564C", mono: false };
+      if (kind === "command") return { color: COLOR.teal, mono: true };
+      if (kind === "command-ok") return { color: COLOR.success, mono: true };
+      if (kind === "command-fail") return { color: COLOR.danger, mono: true };
+      return { color: "#5A564C", mono: true };
+    };
     return agentDefs.map(function (a) {
       const successRate = a.execCount ? Math.round((a.success / a.execCount) * 100) + "%" : "-";
       // Real backend context health (tokens/retries/conflicts/compaction) from the agent's most
@@ -983,6 +1092,7 @@ class Component extends DCLogic {
       const healthLabel = healthScore >= 85 ? "Saudável" : healthScore >= 65 ? "Atenção" : "Crítico";
       const statusMap = {
         attention: { label: "Aguardando revisão", color: COLOR.warning },
+        rate_limited: { label: "Limite de crédito excedido", color: COLOR.danger },
         idle: { label: "Ocioso", color: COLOR.idle },
         running: { label: "Executando agora", color: COLOR.teal },
       };
@@ -999,8 +1109,8 @@ class Component extends DCLogic {
         };
       });
       const lastResult = activity && activity.lastResult;
-      const lastResultColor = lastResult ? (lastResult.status === "completed" ? COLOR.success : lastResult.status === "failed" || lastResult.status === "blocked" ? COLOR.danger : COLOR.idle) : COLOR.idle;
-      const lastResultStatusLabel = lastResult ? (lastResult.status === "completed" ? "Concluído" : lastResult.status === "failed" ? "Falhou" : lastResult.status === "blocked" ? "Bloqueado" : lastResult.status) : "";
+      const lastResultColor = lastResult ? (lastResult.status === "completed" ? COLOR.success : (lastResult.status === "failed" || lastResult.status === "blocked" || lastResult.status === "rate_limited") ? COLOR.danger : COLOR.idle) : COLOR.idle;
+      const lastResultStatusLabel = lastResult ? (lastResult.status === "completed" ? "Concluído" : lastResult.status === "failed" ? "Falhou" : lastResult.status === "blocked" ? "Bloqueado" : lastResult.status === "rate_limited" ? "Limite de crédito excedido" : lastResult.status) : "";
       const pid = Component.AGENT_PROJECT_ID[a.key] || "";
       const skillsData = self.state.projectSkills[pid];
       return Object.assign({}, a, {
@@ -1011,8 +1121,20 @@ class Component extends DCLogic {
         costPct: costPct, costShare: a.execCount ? (a.totalMin + " min") : "sem custo",
         runs: runs,
         liveLine: activity ? activity.lastLine : null,
+        liveLineColor: activity && activity.lastLineKind ? streamKindStyle(activity.lastLineKind).color : "#5A564C",
         hasLiveLine: !!(activity && activity.lastLine),
-        liveFeed: activity ? activity.feed : [],
+        liveFeed: activity ? activity.feed.map(function (ln) {
+          const style = streamKindStyle(ln.kind);
+          const isLong = (ln.text || "").length > 160;
+          const isExpanded = !!self.state.expandedLines[ln.id];
+          const displayText = (isLong && !isExpanded) ? ln.text.slice(0, 160) + "…" : ln.text;
+          return {
+            time: ln.time, text: displayText, color: style.color,
+            fontFamily: style.mono ? "'SFMono-Regular',Consolas,monospace" : "inherit",
+            isLong: isLong, toggleLabel: isExpanded ? "mostrar menos" : "mostrar mais",
+            onToggle: function () { self.toggleLineExpand(ln.id); },
+          };
+        }) : [],
         hasLiveFeed: !!(activity && activity.feed && activity.feed.length),
         hasLastResult: !!lastResult,
         lastResultStatusLabel: lastResultStatusLabel,
@@ -1051,7 +1173,7 @@ class Component extends DCLogic {
     const executionDefs = this.state.liveData ? this.state.liveData.executions : Component.EXECUTION_DEFS;
     const taskDotColor = function (status) {
       if (status === "completed") return COLOR.success;
-      if (status === "failed" || status === "blocked") return COLOR.danger;
+      if (status === "failed" || status === "blocked" || status === "rate_limited") return COLOR.danger;
       if (status === "running") return COLOR.teal;
       return COLOR.idle;
     };
@@ -1247,6 +1369,13 @@ class Component extends DCLogic {
       removeConfirmProject: this.state.removeConfirm ? this.state.removeConfirm.projectId : "",
       onCancelRemoveSkill: () => this.cancelRemoveSkill(),
       onConfirmRemoveSkill: () => { if (this.state.removeConfirm) this.removeSkill(this.state.removeConfirm.projectId, this.state.removeConfirm.skillName); },
+      prPopupOpen: !!this.state.prPopup,
+      prPopupFeature: this.state.prPopup ? this.state.prPopup.feature : "",
+      prPopupProject: this.state.prPopup ? this.state.prPopup.project : "",
+      prPopupBranch: this.state.prPopup ? this.state.prPopup.branch : "",
+      prPopupSha: this.state.prPopup ? this.state.prPopup.sha : "",
+      prPopupUrl: this.state.prPopup ? this.state.prPopup.url : "",
+      onClosePrPopup: () => this.closePrPopup(),
       activeAgentCount: Object.keys(this.state.liveAgents).length,
       runningSummary: summary.running ? summary.running + " execução(ões) em andamento" : "Nenhuma execução em andamento",
       executionTotal: summary.total,

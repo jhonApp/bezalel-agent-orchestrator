@@ -116,7 +116,8 @@ class CodexCLI:
                 with self.tracing.codex_session("orchestrator.codex_task", {"role": role, "prompt": prompt}, metadata) as environment:
                     process = await asyncio.create_subprocess_exec(*command, cwd=str(workdir), env=environment,
                                                                     stdin=asyncio.subprocess.PIPE,
-                                                                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+                                                                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+                                                                    limit=self.settings.codex_stream_limit)
 
                     async def write_stdin() -> None:
                         try:
@@ -176,7 +177,23 @@ class CodexCLI:
         writes it, not after the whole ``codex exec`` session finishes.
         """
         while True:
-            line = await stream.readline()
+            try:
+                line = await stream.readline()
+            except ValueError as exc:
+                # readline() raises plain ValueError (wrapping its own internal
+                # LimitOverrunError) when no separator turns up within the stream's buffer
+                # limit — a single oversized Codex --json line (a tool result embedding
+                # several files' content, say) must not take down the whole agent task.
+                # asyncio has already drained/cleared its internal buffer by this point, so
+                # the pump can just note the truncation and keep reading subsequent lines.
+                note = f"[stream line skipped: {exc}]".encode()
+                buffer.append(note + b"\n")
+                if on_event is not None:
+                    try:
+                        await on_event({"stream": label, "parsed": None, "raw": self._redact(note.decode())})
+                    except Exception:
+                        pass
+                continue
             if not line:
                 break
             buffer.append(line)
@@ -214,8 +231,41 @@ class CodexCLI:
             "-s", self.settings.codex_sandbox, "-",
         ]
 
+    _USAGE_LIMIT_MARKERS = ("usage limit", "limite de uso", "upgrade to pro", "purchase more credits")
+
     @staticmethod
-    def _parse_response(text: str, raw: str) -> AgentResult:
+    def _extract_turn_failure_message(text: str) -> str | None:
+        """Codex can error out before ever emitting a schema-conforming result (hitting its own
+        usage limit, a provider-side network error) — pull the human-readable reason out of its
+        raw JSONL ``error``/``turn.failed`` events so the caller isn't stuck with a generic
+        "no valid structured result" summary that hides what actually happened.
+        """
+        message: str | None = None
+        for line in text.splitlines():
+            line = line.strip()
+            if not line.startswith("{"):
+                continue
+            try:
+                candidate = json.loads(line)
+            except (json.JSONDecodeError, ValueError):
+                continue
+            if not isinstance(candidate, dict):
+                continue
+            if candidate.get("type") == "error" and candidate.get("message"):
+                message = candidate["message"]
+            elif candidate.get("type") == "turn.failed":
+                error = candidate.get("error")
+                if isinstance(error, dict) and error.get("message"):
+                    message = error["message"]
+        return message
+
+    @classmethod
+    def _is_usage_limit_message(cls, message: str) -> bool:
+        lowered = message.lower()
+        return any(marker in lowered for marker in cls._USAGE_LIMIT_MARKERS)
+
+    @classmethod
+    def _parse_response(cls, text: str, raw: str) -> AgentResult:
         candidates = [text.strip()]
         candidates += [line.strip() for line in raw.splitlines() if line.strip().startswith("{")]
         candidates += re.findall(r"```json\s*(\{.*?\})\s*```", text, flags=re.S)
@@ -226,6 +276,11 @@ class CodexCLI:
                     return AgentResult.model_validate({"agent": "unknown", **value})
             except (json.JSONDecodeError, ValueError, TypeError):
                 continue
+        failure_message = cls._extract_turn_failure_message(raw) or cls._extract_turn_failure_message(text)
+        if failure_message:
+            if cls._is_usage_limit_message(failure_message):
+                return AgentResult(agent="unknown", status="rate_limited", summary=failure_message, errors=[failure_message])
+            return AgentResult(agent="unknown", status="failed", summary=f"Codex turn failed: {failure_message}", errors=[failure_message])
         return AgentResult(agent="unknown", status="failed", summary="Codex returned no valid structured result",
                            errors=["structured output could not be parsed"])
 

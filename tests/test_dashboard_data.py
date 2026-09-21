@@ -164,6 +164,45 @@ async def test_dashboard_data_exposes_only_blocking_security_and_contract_findin
     ]
 
 
+async def _seed_execution_with_pull_request(settings: Settings, execution_id: str) -> dict:
+    """Write a durable state as if `merge_changes` had pushed a branch and opened a PR."""
+    now = utc_now()
+    state = {
+        "execution_id": execution_id, "project_id": "bezalel", "feature_request": "add a button",
+        "status": "completed", "started_at": now, "updated_at": now, "context_health": {}, "plan": [],
+        "commits": [{"project_id": "frontend", "branch": "codex/exec-pr-1/frontend", "sha": "abc123"}],
+        "pull_requests": [{"project_id": "frontend", "branch": "codex/exec-pr-1/frontend",
+                           "url": "https://github.com/jhonApp/bezalel-app/pull/42"}],
+    }
+    SQLiteCheckpointer(settings.checkpoint_path).save(execution_id, state, "generate_final_report")
+    settings.langgraph_checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+    async with AsyncSqliteSaver.from_conn_string(str(settings.langgraph_checkpoint_path)) as saver:
+        await saver.setup()
+        checkpoint = empty_checkpoint()
+        checkpoint["channel_values"] = state
+        await saver.aput(
+            {"configurable": {"thread_id": execution_id, "checkpoint_ns": ""}}, checkpoint,
+            {"source": "input", "step": -1, "writes": {}, "parents": {}}, {},
+        )
+    return state
+
+
+@pytest.mark.asyncio
+async def test_dashboard_data_exposes_commits_and_pull_requests_for_the_panel_popup(tmp_path: Path) -> None:
+    settings = settings_for(tmp_path)
+    await _seed_execution_with_pull_request(settings, "exec-pr-1")
+
+    async with running_api(settings) as base_url:
+        async with httpx.AsyncClient(base_url=base_url, timeout=10.0) as client:
+            response = await client.get("/dashboard-data")
+
+    item = next(i for i in response.json()["items"] if i["execution_id"] == "exec-pr-1")
+    assert item["commits"] == [{"project_id": "frontend", "branch": "codex/exec-pr-1/frontend", "sha": "abc123"}]
+    assert item["pull_requests"] == [
+        {"project_id": "frontend", "branch": "codex/exec-pr-1/frontend", "url": "https://github.com/jhonApp/bezalel-app/pull/42"},
+    ]
+
+
 def test_persisted_agent_metrics_support_dashboard_data(tmp_path: Path) -> None:
     store = SQLiteCheckpointer(tmp_path / "checkpoints.sqlite3")
     store.agent_run("exec-1", "frontend", "T001", {

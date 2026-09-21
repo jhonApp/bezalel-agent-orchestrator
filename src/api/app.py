@@ -265,6 +265,9 @@ def create_app(settings: Settings | None = None) -> Any:
                     {"resource": f.get("resource"), "message": f.get("message")}
                     for f in state.get("contracts", []) if f.get("severity") == "blocking"
                 ],
+                "commits": state.get("commits", []),
+                "merges": state.get("merges", []),
+                "pull_requests": state.get("pull_requests", []),
             })
         executions.sort(key=lambda item: item["updated_at"], reverse=True)
         metrics = [item for item in langgraph_agent_metrics(states) if item["agent"] in AGENT_ROLES]

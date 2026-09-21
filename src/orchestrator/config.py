@@ -48,6 +48,11 @@ class Settings(BaseModel):
     openai_api_key: str | None = None
     auto_commit: bool = True
     auto_merge: bool = True
+    # Opt-in: pushes the agent's branch and opens a PR via `gh pr create` instead of merging
+    # locally. When enabled it takes priority over auto_merge for the same run — merging
+    # locally AND opening a PR for the same branch would be redundant. Merging main stays a
+    # human decision made on the PR itself.
+    create_pull_request: bool = False
     auto_deploy: bool = True
     allow_production_deploy: bool = False
     deploy_environment: str = "development"
@@ -66,6 +71,11 @@ class Settings(BaseModel):
     cost_per_1m_input: float = 1.75
     cost_per_1m_output: float = 14.0
     max_output_chars: int = 12000
+    # A single Codex --json line can legitimately be large (a tool result embedding several
+    # files' content); asyncio's default StreamReader limit (64 KiB) is well below that and
+    # raises LimitOverrunError rather than truncating, which the adapter recovers from either
+    # way — this just makes hitting the limit rare in normal use.
+    codex_stream_limit: int = 10 * 1024 * 1024
     project_id: str = "bezalel"
     agent_platform_design_root: Path | None = None
 
@@ -120,6 +130,7 @@ class Settings(BaseModel):
             openai_api_key=os.getenv("OPENAI_API_KEY") or None,
             auto_commit=_bool("AUTO_COMMIT", True),
             auto_merge=_bool("AUTO_MERGE", True),
+            create_pull_request=_bool("CREATE_PULL_REQUEST", False),
             auto_deploy=_bool("AUTO_DEPLOY", True),
             allow_production_deploy=_bool("ALLOW_PRODUCTION_DEPLOY", False),
             deploy_environment=os.getenv("DEPLOY_ENVIRONMENT", "development"),

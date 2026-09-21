@@ -10,6 +10,7 @@ from orchestrator import nodes
 from orchestrator.config import Settings
 from orchestrator.graph import OrchestrationGraph
 from orchestrator.nodes import ExecutionRuntime
+from schemas.models import AgentResult
 
 
 class NoAgentRuntime:
@@ -22,6 +23,43 @@ class NoAgentRuntime:
     def workdir_for(self, state, project_id):
         return Path(".")
 
+    async def announce_agent_started(self, state, task):
+        return None
+
+    async def announce_agent_finished(self, state, task):
+        return None
+
+
+class RecordingRuntime:
+    """Records which project_id run_task was actually dispatched against, per call — proves
+    a gate agent reviews/validates every changed project, not just the first one."""
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+        self.announced_started: list[str] = []
+        self.announced_finished: list[str] = []
+
+    async def run_task(self, state, task):
+        self.calls.append(task["project_id"])
+        failed = task["project_id"] == "backend"
+        return AgentResult(
+            agent=task["agent"], status="failed" if failed else "completed",
+            summary=f"reviewed {task['project_id']}",
+            errors=[f"{task['project_id']} needs changes"] if failed else [],
+        )
+
+    async def persist(self, state, node, event=None, payload=None):
+        return state
+
+    def workdir_for(self, state, project_id):
+        return Path(".")
+
+    async def announce_agent_started(self, state, task):
+        self.announced_started.append(task["project_id"])
+
+    async def announce_agent_finished(self, state, task):
+        self.announced_finished.append(task["project_id"])
+
 
 @pytest.mark.asyncio
 async def test_contract_validation_completes_without_agent_when_no_files_changed(monkeypatch):
@@ -30,7 +68,7 @@ async def test_contract_validation_completes_without_agent_when_no_files_changed
 
     monkeypatch.setattr(nodes, "_changed_project_ids", no_changed_projects)
     state = {
-        "plan": [{"task_id": "T010", "agent": "contracts", "status": "pending"}],
+        "plan": [{"task_id": "T010", "agent": "contracts", "status": "pending", "description": "validate contracts"}],
         "contracts": [],
         "approvals": {},
     }
@@ -51,7 +89,7 @@ async def test_code_review_approves_without_agent_when_no_files_changed(monkeypa
 
     monkeypatch.setattr(nodes, "_changed_project_ids", no_changed_projects)
     state = {
-        "plan": [{"task_id": "T013", "agent": "reviewer", "status": "pending"}],
+        "plan": [{"task_id": "T013", "agent": "reviewer", "status": "pending", "description": "review the diff"}],
         "approvals": {},
     }
 
@@ -62,6 +100,49 @@ async def test_code_review_approves_without_agent_when_no_files_changed(monkeypa
     assert task["result"]["status"] == "completed"
     assert result["review_results"][0]["status"] == "approved"
     assert result["review_results"][0]["blocking"] is False
+
+
+@pytest.mark.asyncio
+async def test_run_contract_validation_validates_every_changed_project_not_just_the_first(monkeypatch):
+    async def two_changed_projects(runtime, state):
+        return ["frontend", "backend"]
+
+    monkeypatch.setattr(nodes, "_changed_project_ids", two_changed_projects)
+    runtime = RecordingRuntime()
+    state = {
+        "plan": [{"task_id": "T010", "agent": "contracts", "status": "pending", "description": "validate contracts"}],
+        "contracts": [], "approvals": {}, "worktrees": {},
+    }
+
+    result = await nodes.run_contract_validation(runtime, state)
+
+    assert runtime.calls == ["frontend", "backend"], "must validate every changed project, not just changed_projects[0]"
+    task = result["plan"][0]
+    assert task["status"] == "failed"
+    assert runtime.announced_started == ["frontend", "backend"]
+    assert runtime.announced_finished == ["frontend", "backend"]
+
+
+@pytest.mark.asyncio
+async def test_code_review_reviews_every_changed_project_not_just_the_first(monkeypatch):
+    async def two_changed_projects(runtime, state):
+        return ["frontend", "backend"]
+
+    monkeypatch.setattr(nodes, "_changed_project_ids", two_changed_projects)
+    runtime = RecordingRuntime()
+    state = {
+        "plan": [{"task_id": "T013", "agent": "reviewer", "status": "pending", "description": "review the diff"}],
+        "approvals": {}, "worktrees": {},
+    }
+
+    result = await nodes.code_review(runtime, state)
+
+    assert runtime.calls == ["frontend", "backend"], "must review every changed project, not just changed_projects[0]"
+    task = result["plan"][0]
+    assert task["status"] == "failed"
+    assert result["review_results"][0]["blocking"] is True
+    assert "frontend" in result["review_results"][0]["summary"]
+    assert "backend" in result["review_results"][0]["summary"]
 
 
 def settings_for(tmp_path: Path) -> Settings:
@@ -157,6 +238,83 @@ output.write_text(json.dumps({
 }), encoding="utf-8")
 sys.exit(0)
 '''
+
+
+@pytest.mark.asyncio
+async def test_run_contract_validation_announces_agent_lifecycle_when_dispatched(tmp_path: Path, monkeypatch) -> None:
+    """contracts calls run_task exactly like the parallel frontend/backend/python_ai dispatch
+    does, but never published agent.started/agent.finished — its card in Manage Agents could
+    never show "Executando agora", always looking idle even while genuinely running."""
+    script = tmp_path / "fake_codex_progress.py"
+    script.write_text(FAKE_CODEX_PROGRESS, encoding="utf-8")
+    settings = Settings(
+        orchestrator_root=tmp_path, workspace_root=tmp_path, frontend_path=tmp_path,
+        backend_path=tmp_path, python_path=tmp_path,
+        codex_command=f'"{sys.executable}" "{script}"',
+        checkpoint_sqlite_path=tmp_path / "checkpoints.sqlite3",
+        langgraph_checkpoint_sqlite_path=tmp_path / "langgraph.sqlite3",
+    )
+    published: list[dict] = []
+
+    async def capture(event: dict) -> None:
+        published.append(event)
+
+    async def one_changed_project(runtime, state):
+        return ["backend"]
+
+    monkeypatch.setattr(nodes, "_changed_project_ids", one_changed_project)
+    runtime = ExecutionRuntime(settings, event_sink=capture)
+    state = {
+        "execution_id": "execution-contracts-1", "feature_request": "add a button",
+        "worktrees": {}, "detected_projects": [], "contracts": [], "approvals": {},
+        "plan": [{"task_id": "T010", "agent": "contracts", "status": "pending", "description": "validate contracts"}],
+    }
+
+    result = await nodes.run_contract_validation(runtime, state)
+
+    task = result["plan"][0]
+    assert task["status"] == "completed"
+    lifecycle_types = [e.get("type") for e in published if e.get("type") in {"agent.started", "agent.finished"}]
+    assert lifecycle_types == ["agent.started", "agent.finished"]
+    assert all(e.get("agent") == "contracts" for e in published if e.get("type") in {"agent.started", "agent.finished"})
+    assert runtime.store.active_agents() == []
+
+
+@pytest.mark.asyncio
+async def test_code_review_announces_agent_lifecycle_when_dispatched(tmp_path: Path, monkeypatch) -> None:
+    script = tmp_path / "fake_codex_progress.py"
+    script.write_text(FAKE_CODEX_PROGRESS, encoding="utf-8")
+    settings = Settings(
+        orchestrator_root=tmp_path, workspace_root=tmp_path, frontend_path=tmp_path,
+        backend_path=tmp_path, python_path=tmp_path,
+        codex_command=f'"{sys.executable}" "{script}"',
+        checkpoint_sqlite_path=tmp_path / "checkpoints.sqlite3",
+        langgraph_checkpoint_sqlite_path=tmp_path / "langgraph.sqlite3",
+    )
+    published: list[dict] = []
+
+    async def capture(event: dict) -> None:
+        published.append(event)
+
+    async def one_changed_project(runtime, state):
+        return ["backend"]
+
+    monkeypatch.setattr(nodes, "_changed_project_ids", one_changed_project)
+    runtime = ExecutionRuntime(settings, event_sink=capture)
+    state = {
+        "execution_id": "execution-reviewer-1", "feature_request": "add a button",
+        "worktrees": {}, "detected_projects": [], "approvals": {},
+        "plan": [{"task_id": "T013", "agent": "reviewer", "status": "pending", "description": "review the diff"}],
+    }
+
+    result = await nodes.code_review(runtime, state)
+
+    task = result["plan"][0]
+    assert task["status"] == "completed"
+    lifecycle_types = [e.get("type") for e in published if e.get("type") in {"agent.started", "agent.finished"}]
+    assert lifecycle_types == ["agent.started", "agent.finished"]
+    assert all(e.get("agent") == "reviewer" for e in published if e.get("type") in {"agent.started", "agent.finished"})
+    assert runtime.store.active_agents() == []
 
 
 @pytest.mark.asyncio

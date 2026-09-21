@@ -14,6 +14,7 @@ from adapters.codex_cli import CodexCLI
 from adapters.command import run_command
 from adapters.deploy import DeployAdapter
 from adapters.git import GitError, GitManager
+from adapters.github import create_pull_request, push_branch
 from adapters.project_detector import discover_projects, discovery_markdown
 from orchestrator.config import Settings
 from orchestrator.routing import gates_pass, ready_tasks
@@ -128,6 +129,27 @@ class ExecutionRuntime:
             if attempts <= self.settings.max_retries:
                 await asyncio.sleep(self.settings.retry_backoff_seconds * (2 ** (attempts - 1)))
         return last or AgentResult(agent=role, status="failed", summary="agent did not return")
+
+    async def announce_agent_started(self, state: dict[str, Any], task: dict[str, Any]) -> None:
+        """Publish the same agent.started lifecycle event dispatch_agents emits for the
+        parallel frontend/backend/python_ai batch — contracts and reviewer call run_task too,
+        and without this their card in Manage Agents never leaves "idle" no matter how long
+        their Codex session actually runs.
+        """
+        started_event = {
+            "type": "agent.started", "execution_id": state["execution_id"], "agent": task["agent"],
+            "task_id": task["task_id"], "description": task.get("description", ""), "status": "running",
+        }
+        self.store.event(state["execution_id"], "agent.started", started_event, utc_now())
+        await self.publish(started_event)
+
+    async def announce_agent_finished(self, state: dict[str, Any], task: dict[str, Any]) -> None:
+        finished_event = {
+            "type": "agent.finished", "execution_id": state["execution_id"], "agent": task["agent"],
+            "task_id": task["task_id"], "status": task.get("status"), "result": task.get("result"),
+        }
+        self.store.event(state["execution_id"], "agent.finished", finished_event, utc_now())
+        await self.publish(finished_event)
 
 
 def _cancelled(runtime: ExecutionRuntime, state: dict[str, Any]) -> bool:
@@ -293,6 +315,34 @@ async def _changed_project_ids(runtime: ExecutionRuntime, state: dict[str, Any])
     return changed
 
 
+async def _run_gate_agent_across_projects(runtime: ExecutionRuntime, state: dict[str, Any], task: dict[str, Any],
+                                          changed_projects: list[str]) -> AgentResult:
+    """Dispatch a gate agent (contracts/reviewer) once per changed project and merge the
+    outcomes. Taking only ``changed_projects[0]`` silently skipped every other project a
+    feature touched — e.g. a feature that changes both frontend and backend in the same
+    execution would only ever get one of the two actually reviewed/validated.
+    """
+    per_project: list[AgentResult] = []
+    for project_id in changed_projects:
+        task["project_id"] = project_id
+        task["worktree"] = str(runtime.workdir_for(state, project_id))
+        task["branch"] = state.get("worktrees", {}).get(project_id, {}).get("branch")
+        await runtime.announce_agent_started(state, task)
+        agent_result = await runtime.run_task(state, task)
+        task["status"] = "completed" if agent_result.status == "completed" else agent_result.status
+        task["result"] = agent_result.model_dump(mode="json")
+        await runtime.announce_agent_finished(state, task)
+        per_project.append(agent_result)
+    statuses = [r.status for r in per_project]
+    overall_status = "completed" if all(s == "completed" for s in statuses) else next(s for s in statuses if s != "completed")
+    return AgentResult(
+        agent=task["agent"], status=overall_status,
+        summary="; ".join(f"[{project}] {r.summary}" for project, r in zip(changed_projects, per_project)),
+        errors=[err for r in per_project for err in r.errors],
+        files_changed=[f for r in per_project for f in r.files_changed],
+    )
+
+
 async def run_contract_validation(runtime: ExecutionRuntime, state: dict[str, Any]) -> dict[str, Any]:
     task = next((t for t in state.get("plan", []) if t.get("agent") == "contracts"), None)
     if task:
@@ -308,10 +358,7 @@ async def run_contract_validation(runtime: ExecutionRuntime, state: dict[str, An
                     summary="No files changed; contract validation was not required.",
                 )
             else:
-                task["project_id"] = changed_projects[0]
-                task["worktree"] = str(runtime.workdir_for(state, changed_projects[0]))
-                task["branch"] = state.get("worktrees", {}).get(changed_projects[0], {}).get("branch")
-                result = await runtime.run_task(state, task)
+                result = await _run_gate_agent_across_projects(runtime, state, task, changed_projects)
             task["result"] = result.model_dump(mode="json")
             task["status"] = "completed" if result.status == "completed" else result.status
             if result.errors:
@@ -392,10 +439,7 @@ async def code_review(runtime: ExecutionRuntime, state: dict[str, Any]) -> dict[
                 summary="No files changed; code review was not required.",
             )
         else:
-            task["project_id"] = changed_projects[0]
-            task["worktree"] = str(runtime.workdir_for(state, changed_projects[0]))
-            task["branch"] = state.get("worktrees", {}).get(changed_projects[0], {}).get("branch")
-            agent = await runtime.run_task(state, task)
+            agent = await _run_gate_agent_across_projects(runtime, state, task, changed_projects)
         result = ReviewResult(status="approved" if agent.status == "completed" else "changes_requested", summary=agent.summary,
                               findings=[{"message": x} for x in agent.errors], blocking=agent.status != "completed")
         task["result"] = agent.model_dump(mode="json")
@@ -428,9 +472,29 @@ async def commit_changes(runtime: ExecutionRuntime, state: dict[str, Any]) -> di
 
 async def merge_changes(runtime: ExecutionRuntime, state: dict[str, Any]) -> dict[str, Any]:
     passed, reasons = gates_pass(state)
-    merges = []
-    if (passed and runtime.settings.auto_merge and not state.get("approvals", {}).get("dry_run")
-            and not state.get("approvals", {}).get("analysis_only")):
+    merges: list[dict[str, Any]] = []
+    pull_requests: list[dict[str, Any]] = []
+    can_run = (passed and not state.get("approvals", {}).get("dry_run")
+               and not state.get("approvals", {}).get("analysis_only"))
+    if can_run and runtime.settings.create_pull_request:
+        for commit in state.get("commits", []):
+            info = state.get("worktrees", {}).get(commit["project_id"], {})
+            base = info.get("base")
+            branch = info.get("branch")
+            if not base or not branch:
+                continue
+            push_result = await push_branch(Path(info["path"]), branch)
+            if not push_result.get("ok"):
+                state["errors"].append(f"push {commit['project_id']}: {push_result.get('error')}")
+                continue
+            title = f"feat: {state['feature_request'].strip()[:60]}"
+            body = f"Automated by bezalel-agent-orchestrator.\n\nExecution: {state['execution_id']}"
+            pr_result = await create_pull_request(Path(info["path"]), base, branch, title, body)
+            if pr_result.get("ok"):
+                pull_requests.append({"project_id": commit["project_id"], "branch": branch, "url": pr_result["url"]})
+            else:
+                state["errors"].append(f"pr {commit['project_id']}: {pr_result.get('error')}")
+    elif can_run and runtime.settings.auto_merge:
         for commit in state.get("commits", []):
             info = state.get("worktrees", {}).get(commit["project_id"], {})
             base = info.get("base")
@@ -444,8 +508,10 @@ async def merge_changes(runtime: ExecutionRuntime, state: dict[str, Any]) -> dic
     elif not passed:
         state["errors"].extend(["merge blocked: " + reason for reason in reasons])
     state["merges"] = merges
+    state["pull_requests"] = pull_requests
     state["next_action"] = "deploy"
-    return await runtime.persist(state, "merge_changes", "git.merge", {"count": len(merges), "blocked": reasons})
+    return await runtime.persist(state, "merge_changes", "git.merge",
+                                  {"count": len(merges), "prs": len(pull_requests), "blocked": reasons})
 
 
 async def deploy(runtime: ExecutionRuntime, state: dict[str, Any]) -> dict[str, Any]:
