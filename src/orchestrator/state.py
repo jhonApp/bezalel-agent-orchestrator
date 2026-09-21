@@ -10,6 +10,7 @@ class ExecutionState(TypedDict, total=False):
     target_projects: list[str] | None
     detected_projects: list[dict[str, Any]]
     relevant_projects: list[str]
+    relevant_projects_source: str
     architecture_summary: str
     plan: list[dict[str, Any]]
     active_task: str | None

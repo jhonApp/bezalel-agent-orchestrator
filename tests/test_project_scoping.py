@@ -224,3 +224,31 @@ def test_create_plan_honors_a_deliberate_empty_relevant_projects_list():
 
     domain_tasks = [t for t in result["plan"] if t["agent"] in ("frontend", "backend", "python_ai")]
     assert domain_tasks == []
+
+
+async def test_relevant_projects_source_survives_a_real_langgraph_state_channel():
+    """Regression: a node-assigned key that isn't declared on ExecutionState is silently
+    dropped by LangGraph between nodes (StateGraph(ExecutionState) only creates channels
+    for declared keys) — relevant_projects_source was exactly this bug until it was added
+    to the TypedDict. This test exercises a real compiled StateGraph across two nodes,
+    not a plain function call, because a plain call can't observe the drop."""
+    from langgraph.graph import END, START, StateGraph
+
+    from orchestrator.state import ExecutionState
+
+    async def write_source(state):
+        return {"relevant_projects_source": "classifier"}
+
+    async def read_source(state):
+        assert state.get("relevant_projects_source") == "classifier"
+        return {}
+
+    builder = StateGraph(ExecutionState)
+    builder.add_node("write", write_source)
+    builder.add_node("read", read_source)
+    builder.add_edge(START, "write")
+    builder.add_edge("write", "read")
+    builder.add_edge("read", END)
+    graph = builder.compile()
+
+    await graph.ainvoke({})
