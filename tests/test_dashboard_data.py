@@ -203,6 +203,70 @@ async def test_dashboard_data_exposes_commits_and_pull_requests_for_the_panel_po
     ]
 
 
+async def _seed_execution_with_quality_scores(settings: Settings, execution_id: str, quality_scores: list[dict]) -> dict:
+    now = utc_now()
+    state = {
+        "execution_id": execution_id, "project_id": "bezalel", "feature_request": "add a button",
+        "status": "completed", "started_at": now, "updated_at": now, "context_health": {}, "plan": [],
+        "quality_scores": quality_scores,
+    }
+    SQLiteCheckpointer(settings.checkpoint_path).save(execution_id, state, "generate_final_report")
+    settings.langgraph_checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+    async with AsyncSqliteSaver.from_conn_string(str(settings.langgraph_checkpoint_path)) as saver:
+        await saver.setup()
+        checkpoint = empty_checkpoint()
+        checkpoint["channel_values"] = state
+        await saver.aput(
+            {"configurable": {"thread_id": execution_id, "checkpoint_ns": ""}}, checkpoint,
+            {"source": "input", "step": -1, "writes": {}, "parents": {}}, {},
+        )
+    return state
+
+
+@pytest.mark.asyncio
+async def test_dashboard_data_exposes_quality_scores_per_execution(tmp_path: Path) -> None:
+    settings = settings_for(tmp_path)
+    await _seed_execution_with_quality_scores(settings, "exec-quality-1", [
+        {"project_id": "frontend", "agent": "frontend", "prompt_version": "1.8",
+         "axes": {"correta": 100}, "quality_score": 91.0, "estimated_cost": 0.02,
+         "duration_seconds": 30.0, "computed_at": utc_now()},
+    ])
+
+    async with running_api(settings) as base_url:
+        async with httpx.AsyncClient(base_url=base_url, timeout=10.0) as client:
+            response = await client.get("/dashboard-data")
+
+    item = next(i for i in response.json()["items"] if i["execution_id"] == "exec-quality-1")
+    assert item["quality_scores"][0]["project_id"] == "frontend"
+    assert item["quality_scores"][0]["quality_score"] == 91.0
+
+
+@pytest.mark.asyncio
+async def test_quality_data_aggregates_by_agent_and_prompt_version(tmp_path: Path) -> None:
+    settings = settings_for(tmp_path)
+    await _seed_execution_with_quality_scores(settings, "exec-v17", [
+        {"project_id": "frontend", "agent": "frontend", "prompt_version": "1.7",
+         "axes": {}, "quality_score": 84.0, "estimated_cost": 0.02, "duration_seconds": 30.0,
+         "computed_at": utc_now()},
+    ])
+    await _seed_execution_with_quality_scores(settings, "exec-v18", [
+        {"project_id": "frontend", "agent": "frontend", "prompt_version": "1.8",
+         "axes": {}, "quality_score": 91.0, "estimated_cost": 0.0208, "duration_seconds": 27.6,
+         "computed_at": utc_now()},
+    ])
+
+    async with running_api(settings) as base_url:
+        async with httpx.AsyncClient(base_url=base_url, timeout=10.0) as client:
+            response = await client.get("/quality-data")
+
+    payload = response.json()
+    assert len(payload["by_execution"]) == 2
+    by_version = {item["prompt_version"]: item for item in payload["by_version"]}
+    assert by_version["1.7"]["avg_quality"] == 84.0
+    assert by_version["1.8"]["avg_quality"] == 91.0
+    assert [item["prompt_version"] for item in payload["by_version"]] == ["1.7", "1.8"]
+
+
 def test_persisted_agent_metrics_support_dashboard_data(tmp_path: Path) -> None:
     store = SQLiteCheckpointer(tmp_path / "checkpoints.sqlite3")
     store.agent_run("exec-1", "frontend", "T001", {

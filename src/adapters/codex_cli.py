@@ -51,10 +51,21 @@ AGENT_SCHEMA = {
         },
         "errors": {"type": "array", "items": {"type": "string"}}, "next_action": {"type": ["string", "null"]},
         "tokens_input": {"type": "integer"}, "tokens_output": {"type": "integer"},
+        "quality": {
+            "type": ["object", "null"],
+            "additionalProperties": False,
+            "properties": {
+                "relevante": {"type": "integer", "minimum": 0, "maximum": 100},
+                "fonte_utilizada": {"type": "integer", "minimum": 0, "maximum": 100},
+                "alucinacao": {"type": "integer", "minimum": 0, "maximum": 100},
+                "cumprimento_regras": {"type": "integer", "minimum": 0, "maximum": 100},
+            },
+            "required": ["relevante", "fonte_utilizada", "alucinacao", "cumprimento_regras"],
+        },
     },
     "required": [
         "status", "summary", "files_changed", "tests", "contracts_changed",
-        "errors", "next_action", "tokens_input", "tokens_output",
+        "errors", "next_action", "tokens_input", "tokens_output", "quality",
     ],
 }
 
