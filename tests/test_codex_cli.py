@@ -33,9 +33,19 @@ def test_exec_command_uses_config_override_for_approval_policy(tmp_path: Path):
     assert command[-1] == "-"
 
 
+def test_agent_schema_has_an_optional_quality_object_for_the_reviewer():
+    quality = AGENT_SCHEMA["properties"]["quality"]
+    assert AGENT_SCHEMA["additionalProperties"] is False
+    assert "quality" not in AGENT_SCHEMA["required"]
+    assert quality["additionalProperties"] is False
+    assert set(quality["required"]) == {"relevante", "fonte_utilizada", "alucinacao", "cumprimento_regras"}
+
+
 def test_agent_schema_is_strict_for_structured_outputs():
     assert AGENT_SCHEMA["additionalProperties"] is False
-    assert set(AGENT_SCHEMA["required"]) == set(AGENT_SCHEMA["properties"])
+    # "quality" is the one deliberately optional property — only the reviewer role
+    # populates it (see prompts/reviewer.md); every other property stays required.
+    assert set(AGENT_SCHEMA["required"]) == set(AGENT_SCHEMA["properties"]) - {"quality"}
     assert AGENT_SCHEMA["properties"]["tests"]["items"]["additionalProperties"] is False
     assert AGENT_SCHEMA["properties"]["contracts_changed"]["items"]["additionalProperties"] is False
 

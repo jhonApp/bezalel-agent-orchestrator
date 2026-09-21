@@ -51,6 +51,17 @@ AGENT_SCHEMA = {
         },
         "errors": {"type": "array", "items": {"type": "string"}}, "next_action": {"type": ["string", "null"]},
         "tokens_input": {"type": "integer"}, "tokens_output": {"type": "integer"},
+        "quality": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "relevante": {"type": "integer"},
+                "fonte_utilizada": {"type": "integer"},
+                "alucinacao": {"type": "integer"},
+                "cumprimento_regras": {"type": "integer"},
+            },
+            "required": ["relevante", "fonte_utilizada", "alucinacao", "cumprimento_regras"],
+        },
     },
     "required": [
         "status", "summary", "files_changed", "tests", "contracts_changed",
