@@ -10,7 +10,7 @@ from typing import Any, Awaitable, Callable
 
 from agents.registry import AGENT_ROLES, role_prompt
 from agents.security import scan_project
-from adapters.codex_cli import CodexCLI
+from adapters.codex_cli import CLASSIFIER_SCHEMA, CodexCLI
 from adapters.command import run_command
 from adapters.deploy import DeployAdapter
 from adapters.git import GitError, GitManager
@@ -151,6 +151,20 @@ class ExecutionRuntime:
         }
         self.store.event(state["execution_id"], "agent.finished", finished_event, utc_now())
         await self.publish(finished_event)
+
+    async def classify_relevant_projects(self, feature_request: str, existing: set[str]) -> list[str]:
+        """Ask Codex which domains this feature request actually touches, so create_plan
+        doesn't dispatch a full coding-agent session for a project with nothing to do.
+        Fails open (every existing project) on any classifier error — this call must
+        never be able to shrink the pipeline by failing.
+        """
+        prompt = role_prompt("classifier", self.settings.orchestrator_root / "prompts")
+        prompt += f"\n\nFeature request:\n{feature_request}"
+        result = await self.codex.execute_json(prompt, self.settings.workspace_root, CLASSIFIER_SCHEMA, "Classifier")
+        if result is None:
+            return sorted(existing)
+        domains = {"frontend": "frontend", "backend": "backend", "python": "python"}
+        return [project for domain, project in domains.items() if result.get(domain, True) and project in existing]
 
 
 def _cancelled(runtime: ExecutionRuntime, state: dict[str, Any]) -> bool:
