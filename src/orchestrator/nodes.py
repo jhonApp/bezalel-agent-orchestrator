@@ -17,6 +17,7 @@ from adapters.git import GitError, GitManager
 from adapters.github import create_pull_request, push_branch
 from adapters.project_detector import discover_projects, discovery_markdown
 from orchestrator.config import Settings
+from orchestrator.quality import build_quality_entry
 from orchestrator.routing import gates_pass, ready_tasks
 from observability.context_health import ContextHealthMonitor
 from observability.langsmith import LangSmithObserver
@@ -317,11 +318,16 @@ async def _changed_project_ids(runtime: ExecutionRuntime, state: dict[str, Any])
 
 
 async def _run_gate_agent_across_projects(runtime: ExecutionRuntime, state: dict[str, Any], task: dict[str, Any],
-                                          changed_projects: list[str]) -> AgentResult:
+                                          changed_projects: list[str],
+                                          on_project_result: Callable[[str, AgentResult], Awaitable[None]] | None = None) -> AgentResult:
     """Dispatch a gate agent (contracts/reviewer) once per changed project and merge the
     outcomes. Taking only ``changed_projects[0]`` silently skipped every other project a
     feature touched — e.g. a feature that changes both frontend and backend in the same
     execution would only ever get one of the two actually reviewed/validated.
+
+    ``on_project_result``, if given, is awaited once per project with that project's own
+    (pre-merge) ``AgentResult`` — the merge below loses per-project detail, so anything
+    that needs it (e.g. quality scoring) must observe it here.
     """
     per_project: list[AgentResult] = []
     for project_id in changed_projects:
@@ -334,6 +340,8 @@ async def _run_gate_agent_across_projects(runtime: ExecutionRuntime, state: dict
         task["result"] = agent_result.model_dump(mode="json")
         await runtime.announce_agent_finished(state, task)
         per_project.append(agent_result)
+        if on_project_result is not None:
+            await on_project_result(project_id, agent_result)
     statuses = [r.status for r in per_project]
     overall_status = "completed" if all(s == "completed" for s in statuses) else next(s for s in statuses if s != "completed")
     return AgentResult(
@@ -443,7 +451,10 @@ async def code_review(runtime: ExecutionRuntime, state: dict[str, Any]) -> dict[
                 summary="No files changed; code review was not required.",
             )
         else:
-            agent = await _run_gate_agent_across_projects(runtime, state, task, changed_projects)
+            async def _record_quality(project_id: str, agent_result: AgentResult) -> None:
+                state.setdefault("quality_scores", []).append(build_quality_entry(project_id, state, agent_result))
+
+            agent = await _run_gate_agent_across_projects(runtime, state, task, changed_projects, on_project_result=_record_quality)
         result = ReviewResult(status="approved" if agent.status == "completed" else "changes_requested", summary=agent.summary,
                               findings=[{"message": x} for x in agent.errors], blocking=agent.status != "completed")
         task["result"] = agent.model_dump(mode="json")

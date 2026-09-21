@@ -437,3 +437,55 @@ async def test_dispatch_agents_stamps_the_current_prompt_version_onto_the_result
 
     task = result["plan"][0]
     assert task["result"]["prompt_version"] == AGENT_ROLES["frontend"]["prompt_version"]
+
+
+@pytest.mark.asyncio
+async def test_code_review_records_a_quality_score_per_reviewed_project(monkeypatch):
+    async def two_changed_projects(runtime, state):
+        return ["frontend", "backend"]
+
+    monkeypatch.setattr(nodes, "_changed_project_ids", two_changed_projects)
+    runtime = RecordingRuntime()
+    state = {
+        "plan": [
+            {"task_id": "T001", "agent": "frontend", "project_id": "frontend", "status": "completed",
+             "result": {"prompt_version": "1.2", "estimated_cost": 0.01, "duration_seconds": 12.0, "errors": []}},
+            {"task_id": "T002", "agent": "backend", "project_id": "backend", "status": "completed",
+             "result": {"prompt_version": "2.0", "estimated_cost": 0.02, "duration_seconds": 20.0, "errors": []}},
+            {"task_id": "T013", "agent": "reviewer", "status": "pending", "description": "review the diff"},
+        ],
+        "approvals": {}, "worktrees": {}, "test_results": [], "security_findings": [],
+    }
+
+    result = await nodes.code_review(runtime, state)
+
+    scores = result["quality_scores"]
+    assert {s["project_id"] for s in scores} == {"frontend", "backend"}
+    frontend = next(s for s in scores if s["project_id"] == "frontend")
+    assert frontend["agent"] == "frontend"
+    assert frontend["prompt_version"] == "1.2"
+    assert frontend["axes"]["correta"] == 100
+    assert frontend["axes"]["formato_valido"] == 100
+    assert frontend["axes"]["seguranca"] == 100
+    # RecordingRuntime's AgentResult carries no `.quality`, so the LLM axes stay unscored.
+    assert frontend["axes"]["relevante"] is None
+    assert frontend["quality_score"] is not None
+
+
+@pytest.mark.asyncio
+async def test_run_contract_validation_does_not_record_quality_scores(monkeypatch):
+    """Regression: only the reviewer's pass records quality — contracts is a different
+    gate agent and must not gain this side effect."""
+    async def two_changed_projects(runtime, state):
+        return ["frontend", "backend"]
+
+    monkeypatch.setattr(nodes, "_changed_project_ids", two_changed_projects)
+    runtime = RecordingRuntime()
+    state = {
+        "plan": [{"task_id": "T010", "agent": "contracts", "status": "pending", "description": "validate contracts"}],
+        "contracts": [], "approvals": {}, "worktrees": {},
+    }
+
+    result = await nodes.run_contract_validation(runtime, state)
+
+    assert result.get("quality_scores", []) == []
