@@ -10,10 +10,10 @@ from langgraph.graph import END, START, StateGraph
 
 from adapters.codex_cli import CodexCLI
 from orchestrator.config import Settings
-from orchestrator.nodes import (ExecutionRuntime, analyze_request, code_review, collect_agent_results, commit_changes,
-                                create_contracts, create_plan, deploy, discover_projects_node, dispatch_agents,
-                                generate_final_report, merge_changes, resolve_dependencies, run_contract_validation,
-                                run_tests, security_review)
+from orchestrator.nodes import (ExecutionRuntime, analyze_request, classify_projects, code_review, collect_agent_results,
+                                commit_changes, create_contracts, create_plan, deploy, discover_projects_node,
+                                dispatch_agents, generate_final_report, merge_changes, resolve_dependencies,
+                                run_contract_validation, run_tests, security_review)
 from orchestrator.state import ExecutionState
 from persistence.checkpointer import SQLiteCheckpointer
 from schemas.models import ExecutionRequest, initial_state, utc_now
@@ -25,6 +25,7 @@ class OrchestrationGraph:
         builder = StateGraph(ExecutionState)
         nodes: list[tuple[str, Callable]] = [
             ("analyze_request", analyze_request), ("discover_projects", discover_projects_node),
+            ("classify_projects", classify_projects),
             ("create_plan", create_plan), ("resolve_dependencies", resolve_dependencies),
             ("create_contracts", create_contracts), ("dispatch_agents", dispatch_agents),
             ("collect_agent_results", collect_agent_results), ("run_contract_validation", run_contract_validation),

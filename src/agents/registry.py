@@ -11,6 +11,7 @@ AGENT_ROLES = {
     "qa": {"label": "QA", "project_id": "backend", "prompt": "qa.md", "prompt_version": "1.0"},
     "security": {"label": "Security/Cloud", "project_id": "backend", "prompt": "security.md", "prompt_version": "1.0"},
     "reviewer": {"label": "Code Reviewer", "project_id": "backend", "prompt": "reviewer.md", "prompt_version": "1.1"},
+    "classifier": {"label": "Domain Classifier", "project_id": None, "prompt": "classifier.md", "prompt_version": "1.0"},
 }
 
 

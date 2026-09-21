@@ -69,6 +69,17 @@ AGENT_SCHEMA = {
     ],
 }
 
+CLASSIFIER_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "frontend": {"type": "boolean"},
+        "backend": {"type": "boolean"},
+        "python": {"type": "boolean"},
+    },
+    "required": ["frontend", "backend", "python"],
+}
+
 
 def resolve_codex_command(configured: str) -> list[str]:
     parts = shlex.split(configured, posix=os.name != "nt") or ["codex"]
@@ -178,6 +189,41 @@ class CodexCLI:
             diagnostic_output = response_text or raw or err
             parsed.raw_response = self._redact(diagnostic_output[-self.settings.max_output_chars:])
             return parsed
+
+    async def execute_json(self, prompt: str, workdir: Path, schema: dict[str, Any], label: str,
+                           timeout: int = 120) -> dict[str, Any] | None:
+        """Run one short, read-only Codex turn constrained to `schema` and return the raw
+        parsed JSON — for callers that don't need (or don't fit) the AgentResult contract,
+        like the domain-relevance classifier. Returns None on any failure; the caller
+        decides the fallback.
+        """
+        workdir = workdir.resolve()
+        with tempfile.TemporaryDirectory(prefix="bezalel-codex-") as temp:
+            temp_path = Path(temp)
+            schema_path = temp_path / "result.schema.json"
+            output_path = temp_path / "last-message.txt"
+            schema_path.write_text(json.dumps(schema), encoding="utf-8")
+            full_prompt = f"You are the {label} in the Bezalel orchestrator.\n\n{prompt}\n\nReturn only a JSON object matching the supplied schema in your final response.\n"
+            command = self._exec_command(workdir, schema_path, output_path)
+            try:
+                process = await asyncio.create_subprocess_exec(*command, cwd=str(workdir),
+                                                                stdin=asyncio.subprocess.PIPE,
+                                                                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+                                                                limit=self.settings.codex_stream_limit)
+                try:
+                    await asyncio.wait_for(process.communicate(full_prompt.encode("utf-8")), timeout=timeout)
+                except asyncio.TimeoutError:
+                    process.kill()
+                    await process.wait()
+                    return None
+            except OSError:
+                return None
+            if process.returncode != 0 or not output_path.exists():
+                return None
+            try:
+                return json.loads(output_path.read_text(encoding="utf-8", errors="replace"))
+            except (json.JSONDecodeError, ValueError):
+                return None
 
     async def _pump(self, stream: asyncio.StreamReader, label: str, buffer: list[bytes],
                     on_event: Callable[[dict[str, Any]], Awaitable[None]] | None) -> None:

@@ -1,0 +1,254 @@
+from __future__ import annotations
+
+import asyncio
+from pathlib import Path
+
+import pytest
+
+from orchestrator import nodes
+from orchestrator.config import Settings
+from orchestrator.nodes import ExecutionRuntime
+from persistence.checkpointer import SQLiteCheckpointer
+from schemas.models import ExecutionRequest, initial_state
+
+
+def test_initial_state_carries_target_projects_override_through():
+    request = ExecutionRequest(feature_request="add a button", target_projects=["frontend"])
+    state = initial_state(request, "exec-1")
+    assert state["target_projects"] == ["frontend"]
+
+
+def test_initial_state_defaults_target_projects_to_none():
+    request = ExecutionRequest(feature_request="add a button")
+    state = initial_state(request, "exec-1")
+    assert state["target_projects"] is None
+
+
+def test_initial_state_defaults_relevant_projects_to_empty_list():
+    request = ExecutionRequest(feature_request="add a button")
+    state = initial_state(request, "exec-1")
+    assert state["relevant_projects"] == []
+
+
+def test_initial_state_preserves_an_explicit_empty_target_projects_list():
+    request = ExecutionRequest(feature_request="tweak a config file only", target_projects=[])
+    state = initial_state(request, "exec-1")
+    assert state["target_projects"] == []
+
+
+def settings_for(tmp_path: Path) -> Settings:
+    return Settings(
+        orchestrator_root=tmp_path, workspace_root=tmp_path, frontend_path=tmp_path,
+        backend_path=tmp_path, python_path=tmp_path,
+        checkpoint_sqlite_path=tmp_path / "checkpoints.sqlite3",
+        langgraph_checkpoint_sqlite_path=tmp_path / "langgraph.sqlite3",
+    )
+
+
+class FakeCodexForClassifier:
+    def __init__(self, result):
+        self._result = result
+        self.calls = []
+
+    async def execute_json(self, prompt, workdir, schema, label, timeout=120):
+        self.calls.append({"prompt": prompt, "workdir": workdir, "schema": schema, "label": label})
+        return self._result
+
+
+@pytest.mark.asyncio
+async def test_classify_relevant_projects_filters_by_the_classifier_result(tmp_path: Path):
+    settings = settings_for(tmp_path)
+    runtime = ExecutionRuntime(settings, store=SQLiteCheckpointer(settings.checkpoint_path),
+                               codex=FakeCodexForClassifier({"frontend": True, "backend": False, "python": False}))
+
+    relevant, source = await runtime.classify_relevant_projects("add a button", {"frontend", "backend", "python"})
+
+    assert relevant == ["frontend"]
+    assert source == "classifier"
+
+
+@pytest.mark.asyncio
+async def test_classify_relevant_projects_fails_open_when_the_classifier_returns_none(tmp_path: Path):
+    settings = settings_for(tmp_path)
+    runtime = ExecutionRuntime(settings, store=SQLiteCheckpointer(settings.checkpoint_path),
+                               codex=FakeCodexForClassifier(None))
+
+    relevant, source = await runtime.classify_relevant_projects("add a button", {"frontend", "backend"})
+
+    assert relevant == ["backend", "frontend"]
+    assert source == "fail_open"
+
+
+@pytest.mark.asyncio
+async def test_classify_relevant_projects_defaults_a_missing_field_to_relevant(tmp_path: Path):
+    settings = settings_for(tmp_path)
+    runtime = ExecutionRuntime(settings, store=SQLiteCheckpointer(settings.checkpoint_path),
+                               codex=FakeCodexForClassifier({"frontend": True}))
+
+    relevant, source = await runtime.classify_relevant_projects("add a button", {"frontend", "backend", "python"})
+
+    assert set(relevant) == {"frontend", "backend", "python"}
+    assert source == "classifier"
+
+
+class StubClassifyRuntime:
+    def __init__(self, relevant):
+        self._relevant = relevant
+        self.classify_calls = []
+        self.persist_calls = []
+
+    async def classify_relevant_projects(self, feature_request, existing):
+        self.classify_calls.append((feature_request, existing))
+        return self._relevant, "classifier"
+
+    async def persist(self, state, node, event=None, payload=None):
+        self.persist_calls.append((state, node, event, payload))
+        return state
+
+
+@pytest.mark.asyncio
+async def test_classify_projects_node_uses_the_override_and_skips_the_classifier():
+    runtime = StubClassifyRuntime(relevant=["frontend", "backend", "python"])
+    state = {
+        "feature_request": "add a button", "target_projects": ["frontend"],
+        "detected_projects": [
+            {"project_id": "frontend", "exists": True},
+            {"project_id": "backend", "exists": True},
+        ],
+    }
+
+    result = await nodes.classify_projects(runtime, state)
+
+    assert result["relevant_projects"] == ["frontend"]
+    assert runtime.classify_calls == []
+    assert result["relevant_projects_source"] == "override"
+    assert runtime.persist_calls[0][3]["source"] == "override"
+
+
+@pytest.mark.asyncio
+async def test_classify_projects_node_calls_the_classifier_when_no_override_is_given():
+    runtime = StubClassifyRuntime(relevant=["backend"])
+    state = {
+        "feature_request": "fix the endpoint", "target_projects": None,
+        "detected_projects": [
+            {"project_id": "frontend", "exists": True},
+            {"project_id": "backend", "exists": True},
+        ],
+    }
+
+    result = await nodes.classify_projects(runtime, state)
+
+    assert result["relevant_projects"] == ["backend"]
+    assert runtime.classify_calls == [("fix the endpoint", {"frontend", "backend"})]
+    assert result["relevant_projects_source"] == "classifier"
+    assert runtime.persist_calls[0][3]["source"] == "classifier"
+
+
+@pytest.mark.asyncio
+async def test_classify_projects_node_filters_the_override_by_existing_projects():
+    runtime = StubClassifyRuntime(relevant=[])
+    state = {
+        "feature_request": "add a button", "target_projects": ["frontend", "python"],
+        "detected_projects": [{"project_id": "frontend", "exists": True}],
+    }
+
+    result = await nodes.classify_projects(runtime, state)
+
+    assert result["relevant_projects"] == ["frontend"]
+    assert result["relevant_projects_source"] == "override"
+
+
+class StubPersistRuntime:
+    async def persist(self, state, node, event=None, payload=None):
+        return state
+
+
+def test_create_plan_only_creates_tasks_for_relevant_projects():
+    state = {
+        "detected_projects": [
+            {"project_id": "frontend", "exists": True},
+            {"project_id": "backend", "exists": True},
+            {"project_id": "python", "exists": True},
+        ],
+        "relevant_projects": ["frontend"],
+    }
+
+    result = asyncio.run(nodes.create_plan(StubPersistRuntime(), state))
+
+    domain_tasks = [t for t in result["plan"] if t["agent"] in ("frontend", "backend", "python_ai")]
+    assert [t["agent"] for t in domain_tasks] == ["frontend"]
+
+
+def test_create_plan_gate_tasks_depend_only_on_the_relevant_domain_tasks():
+    state = {
+        "detected_projects": [
+            {"project_id": "frontend", "exists": True},
+            {"project_id": "backend", "exists": True},
+        ],
+        "relevant_projects": ["backend"],
+    }
+
+    result = asyncio.run(nodes.create_plan(StubPersistRuntime(), state))
+
+    contracts = next(t for t in result["plan"] if t["agent"] == "contracts")
+    backend_task = next(t for t in result["plan"] if t["agent"] == "backend")
+    assert contracts["dependencies"] == [backend_task["task_id"]]
+
+
+def test_create_plan_falls_back_to_existing_when_relevant_projects_is_absent():
+    """Defensive default: relevant_projects should always be set by classify_projects by
+    the time create_plan runs, but if it's ever missing, don't silently create zero tasks."""
+    state = {
+        "detected_projects": [{"project_id": "frontend", "exists": True}],
+    }
+
+    result = asyncio.run(nodes.create_plan(StubPersistRuntime(), state))
+
+    domain_tasks = [t for t in result["plan"] if t["agent"] in ("frontend", "backend", "python_ai")]
+    assert [t["agent"] for t in domain_tasks] == ["frontend"]
+
+
+def test_create_plan_honors_a_deliberate_empty_relevant_projects_list():
+    """relevant_projects=[] is a real decision (classifier found nothing relevant, or an
+    explicit target_projects=[] override) — it must not be treated the same as the key
+    being absent entirely."""
+    state = {
+        "detected_projects": [
+            {"project_id": "frontend", "exists": True},
+            {"project_id": "backend", "exists": True},
+        ],
+        "relevant_projects": [],
+    }
+
+    result = asyncio.run(nodes.create_plan(StubPersistRuntime(), state))
+
+    domain_tasks = [t for t in result["plan"] if t["agent"] in ("frontend", "backend", "python_ai")]
+    assert domain_tasks == []
+
+
+async def test_relevant_projects_source_survives_a_real_langgraph_state_channel():
+    """Regression: a node-assigned key that isn't declared on ExecutionState is silently
+    dropped by LangGraph between nodes (StateGraph(ExecutionState) only creates channels
+    for declared keys) — relevant_projects_source was exactly this bug until it was added
+    to the TypedDict. This test exercises a real compiled StateGraph across two nodes,
+    not a plain function call, because a plain call can't observe the drop."""
+    from langgraph.graph import END, START, StateGraph
+
+    from orchestrator.state import ExecutionState
+
+    async def write_source(state):
+        return {"relevant_projects_source": "classifier"}
+
+    async def read_source(state):
+        assert state.get("relevant_projects_source") == "classifier"
+        return {}
+
+    builder = StateGraph(ExecutionState)
+    builder.add_node("write", write_source)
+    builder.add_node("read", read_source)
+    builder.add_edge(START, "write")
+    builder.add_edge("write", "read")
+    builder.add_edge("read", END)
+    graph = builder.compile()
+
+    await graph.ainvoke({})
