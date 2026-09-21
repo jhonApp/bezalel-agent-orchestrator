@@ -594,6 +594,61 @@
       </div>
     </sc-if>
 
+    <!-- ===================== QUALIDADE ===================== -->
+    <sc-if value="{{ isQuality }}" hint-placeholder-val="{{ false }}">
+      <div data-screen-label="Qualidade" style="max-width:1180px;">
+        <div style="margin-bottom:26px; border-bottom:2px solid #14140F; padding-bottom:14px;">
+          <h1 style="font-size:26px; font-weight:800; letter-spacing:0.01em; margin:0 0 5px; text-transform:uppercase;">Qualidade</h1>
+          <p style="font-size:12.5px; color:#5A564C; margin:0;">Nota por eixo de cada revisão, e como a qualidade/custo/latência mudam entre versões de prompt.</p>
+        </div>
+
+        <div style="border:1.5px solid #14140F; margin-bottom:24px;">
+          <div style="background:#14140F; color:#fff; padding:8px 16px; font-size:11px; letter-spacing:0.08em; text-transform:uppercase; font-weight:700;">Últimas avaliações</div>
+          <div style="padding:16px;">
+            <sc-if value="{{ hasQualityByExecution }}" hint-placeholder-val="{{ false }}">
+              <div style="display:flex; flex-direction:column; gap:10px;">
+                <sc-for list="{{ qualityByExecution }}" as="q" hint-placeholder-count="3">
+                  <div style="border:1px solid #14140F; padding:12px 14px;">
+                    <div style="display:flex; justify-content:space-between; align-items:baseline; margin-bottom:8px;">
+                      <span style="font-size:12px; font-weight:800; text-transform:uppercase;">{{ q.agent }} · {{ q.project }}</span>
+                      <span style="font-size:10px; color:#5A564C; text-transform:uppercase;">prompt v{{ q.version }} · nota {{ q.score }}</span>
+                    </div>
+                    <div style="display:flex; flex-wrap:wrap; gap:8px;">
+                      <sc-for list="{{ q.axes }}" as="ax" hint-placeholder-count="7">
+                        <span style="font-size:10px; padding:4px 8px; border:1px solid #9B9689; color:#5A564C; text-transform:uppercase;">{{ ax.label }}: {{ ax.value }}</span>
+                      </sc-for>
+                    </div>
+                  </div>
+                </sc-for>
+              </div>
+            </sc-if>
+            <sc-if value="{{ !hasQualityByExecution }}" hint-placeholder-val="{{ true }}">
+              <div style="font-size:11.5px; color:#5A564C; font-style:italic;">Nenhuma avaliação registrada ainda.</div>
+            </sc-if>
+          </div>
+        </div>
+
+        <div style="border:1.5px solid #14140F;">
+          <div style="background:#14140F; color:#fff; padding:8px 16px; font-size:11px; letter-spacing:0.08em; text-transform:uppercase; font-weight:700;">Comparação entre versões de prompt</div>
+          <div style="padding:16px;">
+            <sc-if value="{{ hasQualityByVersion }}" hint-placeholder-val="{{ false }}">
+              <div style="display:flex; flex-direction:column; gap:8px;">
+                <sc-for list="{{ qualityByVersion }}" as="v" hint-placeholder-count="2">
+                  <div style="display:flex; justify-content:space-between; align-items:center; border:1px solid #14140F; padding:10px 14px;">
+                    <span style="font-size:12px; font-weight:700; text-transform:uppercase;">{{ v.agent }} — prompt v{{ v.version }} ({{ v.runs }} exec.)</span>
+                    <span style="font-size:11px; color:#5A564C;">qualidade {{ v.quality }} {{ v.qualityDelta }} · custo {{ v.cost }} {{ v.costDelta }} · latência {{ v.duration }} {{ v.durationDelta }}</span>
+                  </div>
+                </sc-for>
+              </div>
+            </sc-if>
+            <sc-if value="{{ !hasQualityByVersion }}" hint-placeholder-val="{{ true }}">
+              <div style="font-size:11.5px; color:#5A564C; font-style:italic;">Sem dado suficiente para comparar versões ainda.</div>
+            </sc-if>
+          </div>
+        </div>
+      </div>
+    </sc-if>
+
     <!-- ===================== PROJETOS ===================== -->
     <sc-if value="{{ isProjects }}" hint-placeholder-val="{{ false }}">
       <div data-screen-label="Projetos" style="max-width:1180px;">
@@ -794,13 +849,15 @@ class Component extends DCLogic {
     auditLog: [],
     toast: null,
     liveData: null,
+    qualityData: null,
     liveAgents: {},
     agentActivity: {},
   };
 
   componentDidMount() {
     this.refreshDashboard();
-    this._dashboardPoll = setInterval(() => this.refreshDashboard(), 2000);
+    this.refreshQuality();
+    this._dashboardPoll = setInterval(() => { this.refreshDashboard(); this.refreshQuality(); }, 2000);
     this.eventSource = new EventSource("/events");
     this.eventSource.addEventListener("orchestration", (message) => {
       const event = JSON.parse(message.data);
@@ -943,6 +1000,13 @@ class Component extends DCLogic {
         }));
       })
       .catch(() => this.showToast("Dados reais indisponíveis; exibindo último snapshot.", 2600, "error"));
+  }
+
+  refreshQuality() {
+    fetch("/quality-data")
+      .then((response) => response.ok ? response.json() : Promise.reject(new Error("quality-data unavailable")))
+      .then((data) => { this.setState({ qualityData: data }); })
+      .catch(() => {});
   }
 
   showToast(text, durationMs, kind) {
@@ -1343,6 +1407,7 @@ class Component extends DCLogic {
       isMcps: this.state.view === "mcps",
       isCosts: this.state.view === "costs",
       isHealth: this.state.view === "health",
+      isQuality: this.state.view === "quality",
       isProjects: this.state.view === "projects",
       isAudit: this.state.view === "audit",
       navItems: [
@@ -1352,6 +1417,7 @@ class Component extends DCLogic {
         { key: "mcps", label: "MCPS" },
         { key: "costs", label: "CUSTOS" },
         { key: "health", label: "SAÚDE" },
+        { key: "quality", label: "QUALIDADE" },
         { key: "projects", label: "PROJETOS" },
         { key: "audit", label: "AUDITORIA" },
       ].map((n) => ({ label: n.label, onClick: () => this.setState({ view: n.key, selectedAgentKey: null, selectedExecutionId: null }), style: this.navBtnStyle(n.key) })),
@@ -1376,6 +1442,36 @@ class Component extends DCLogic {
       prPopupSha: this.state.prPopup ? this.state.prPopup.sha : "",
       prPopupUrl: this.state.prPopup ? this.state.prPopup.url : "",
       onClosePrPopup: () => this.closePrPopup(),
+      qualityByExecution: (this.state.qualityData ? this.state.qualityData.by_execution : []).slice(0, 20).map((row) => ({
+        key: row.execution_id + ":" + row.project_id + ":" + row.computed_at,
+        project: row.project_id,
+        agent: row.agent || "-",
+        version: row.prompt_version || "-",
+        score: row.quality_score === null || row.quality_score === undefined ? "—" : Math.round(row.quality_score) + "%",
+        axes: ["correta", "relevante", "fonte_utilizada", "alucinacao", "formato_valido", "cumprimento_regras", "seguranca"].map((key) => ({
+          label: key, value: (row.axes && row.axes[key] !== null && row.axes[key] !== undefined) ? row.axes[key] + "%" : "—",
+        })),
+      })),
+      hasQualityByExecution: !!(this.state.qualityData && this.state.qualityData.by_execution && this.state.qualityData.by_execution.length),
+      qualityByVersion: (this.state.qualityData ? this.state.qualityData.by_version : []).map((row, index, all) => {
+        const prev = all.slice(0, index).reverse().find((p) => p.agent === row.agent);
+        const pct = (curr, before) => (before === null || before === undefined || before === 0 || curr === null || curr === undefined) ? null : Math.round(((curr - before) / before) * 1000) / 10;
+        const qualityDelta = prev && row.avg_quality !== null && prev.avg_quality !== null ? Math.round((row.avg_quality - prev.avg_quality) * 10) / 10 : null;
+        const costDelta = prev ? pct(row.avg_cost_usd, prev.avg_cost_usd) : null;
+        const durationDelta = prev ? pct(row.avg_duration_seconds, prev.avg_duration_seconds) : null;
+        const fmtDelta = (v, suffix) => v === null ? "" : (v > 0 ? "+" : "") + v + suffix;
+        return {
+          key: row.agent + ":" + row.prompt_version,
+          agent: row.agent, version: row.prompt_version, runs: row.runs,
+          quality: row.avg_quality === null ? "—" : Math.round(row.avg_quality) + "%",
+          qualityDelta: fmtDelta(qualityDelta, "pp"),
+          cost: "US$" + row.avg_cost_usd.toFixed(4),
+          costDelta: fmtDelta(costDelta, "%"),
+          duration: row.avg_duration_seconds + "s",
+          durationDelta: fmtDelta(durationDelta, "%"),
+        };
+      }),
+      hasQualityByVersion: !!(this.state.qualityData && this.state.qualityData.by_version && this.state.qualityData.by_version.length),
       activeAgentCount: Object.keys(this.state.liveAgents).length,
       runningSummary: summary.running ? summary.running + " execução(ões) em andamento" : "Nenhuma execução em andamento",
       executionTotal: summary.total,
