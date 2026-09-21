@@ -7,7 +7,9 @@ class ExecutionState(TypedDict, total=False):
     execution_id: str
     project_id: str
     feature_request: str
+    target_projects: list[str] | None
     detected_projects: list[dict[str, Any]]
+    relevant_projects: list[str]
     architecture_summary: str
     plan: list[dict[str, Any]]
     active_task: str | None
