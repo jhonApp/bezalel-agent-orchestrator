@@ -10,7 +10,7 @@ from orchestrator import nodes
 from orchestrator.config import Settings
 from orchestrator.graph import OrchestrationGraph
 from orchestrator.nodes import ExecutionRuntime
-from schemas.models import AgentResult
+from schemas.models import AgentResult, SecurityFinding
 
 
 class NoAgentRuntime:
@@ -347,3 +347,43 @@ async def test_run_task_publishes_agent_stream_events(tmp_path: Path):
     assert first["agent"] == "frontend"
     assert first["task_id"] == "T001"
     assert first["parsed"] == {"kind": "tool_call", "tool": "apply_patch"}
+
+
+@pytest.mark.asyncio
+async def test_security_review_tags_each_finding_with_its_project_id(monkeypatch):
+    async def fake_changed_paths(runtime, state, project_id):
+        return ["src/config.py"] if project_id == "frontend" else ["appsettings.json"]
+
+    def fake_scan_project(project, paths):
+        return [SecurityFinding(severity="blocking", path=paths[0], message="looks like a secret")]
+
+    monkeypatch.setattr(nodes, "_changed_paths", fake_changed_paths)
+    monkeypatch.setattr(nodes, "scan_project", fake_scan_project)
+
+    class StubRuntime:
+        def workdir_for(self, state, project_id):
+            return Path(".")
+
+        async def persist(self, state, node, event=None, payload=None):
+            return state
+
+    state = {
+        "detected_projects": [
+            {"project_id": "frontend", "exists": True},
+            {"project_id": "backend", "exists": True},
+        ],
+        "plan": [],
+    }
+
+    result = await nodes.security_review(StubRuntime(), state)
+
+    findings = result["security_findings"]
+    assert {f["project_id"] for f in findings} == {"frontend", "backend"}
+
+
+def test_execution_state_model_defaults_quality_scores_to_an_empty_list():
+    from schemas.models import ExecutionStateModel
+
+    model = ExecutionStateModel(execution_id="exec-1", project_id="bezalel", feature_request="add a button")
+
+    assert model.quality_scores == []

@@ -22,6 +22,7 @@ class ExecutionState(TypedDict, total=False):
     security_findings: list[dict[str, Any]]
     security_blocking: bool
     review_results: list[dict[str, Any]]
+    quality_scores: list[dict[str, Any]]
     deploy_results: list[dict[str, Any]]
     errors: list[str]
     retries: int

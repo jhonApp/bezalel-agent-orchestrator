@@ -73,6 +73,7 @@ class AgentResult(BaseModel):
     duration_seconds: float = 0.0
     estimated_cost: float = 0.0
     raw_response: str = ""
+    quality: dict[str, int] | None = None
 
 
 class ContractFinding(BaseModel):
@@ -98,6 +99,7 @@ class SecurityFinding(BaseModel):
     path: str
     message: str
     evidence: str = ""
+    project_id: str | None = None
 
 
 class ReviewResult(BaseModel):
@@ -160,6 +162,7 @@ class ExecutionStateModel(BaseModel):
     pull_requests: list[dict[str, Any]] = Field(default_factory=list)
     test_results: list[TestResult] = Field(default_factory=list)
     review_results: list[ReviewResult] = Field(default_factory=list)
+    quality_scores: list[dict[str, Any]] = Field(default_factory=list)
     deploy_results: list[DeployResult] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list)
     retries: int = 0

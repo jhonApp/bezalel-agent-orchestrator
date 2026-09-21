@@ -414,7 +414,10 @@ async def security_review(runtime: ExecutionRuntime, state: dict[str, Any]) -> d
             paths = await _changed_paths(runtime, state, project["project_id"])
             if paths:
                 worktree_project = {**project, "path": str(runtime.workdir_for(state, project["project_id"]))}
-                findings.extend(scan_project(type("Project", (), worktree_project)(), paths))
+                project_findings = scan_project(type("Project", (), worktree_project)(), paths)
+                for finding in project_findings:
+                    finding.project_id = project["project_id"]
+                findings.extend(project_findings)
     blocking = any(f.severity == "blocking" for f in findings)
     state["security_findings"] = [f.model_dump(mode="json") for f in findings]
     state["security_blocking"] = blocking
