@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from orchestrator import nodes
 from orchestrator.config import Settings
 from orchestrator.nodes import ExecutionRuntime
 from persistence.checkpointer import SQLiteCheckpointer
@@ -84,3 +85,63 @@ async def test_classify_relevant_projects_defaults_a_missing_field_to_relevant(t
     relevant = await runtime.classify_relevant_projects("add a button", {"frontend", "backend", "python"})
 
     assert set(relevant) == {"frontend", "backend", "python"}
+
+
+class StubClassifyRuntime:
+    def __init__(self, relevant):
+        self._relevant = relevant
+        self.classify_calls = []
+
+    async def classify_relevant_projects(self, feature_request, existing):
+        self.classify_calls.append((feature_request, existing))
+        return self._relevant
+
+    async def persist(self, state, node, event=None, payload=None):
+        return state
+
+
+@pytest.mark.asyncio
+async def test_classify_projects_node_uses_the_override_and_skips_the_classifier():
+    runtime = StubClassifyRuntime(relevant=["frontend", "backend", "python"])
+    state = {
+        "feature_request": "add a button", "target_projects": ["frontend"],
+        "detected_projects": [
+            {"project_id": "frontend", "exists": True},
+            {"project_id": "backend", "exists": True},
+        ],
+    }
+
+    result = await nodes.classify_projects(runtime, state)
+
+    assert result["relevant_projects"] == ["frontend"]
+    assert runtime.classify_calls == []
+
+
+@pytest.mark.asyncio
+async def test_classify_projects_node_calls_the_classifier_when_no_override_is_given():
+    runtime = StubClassifyRuntime(relevant=["backend"])
+    state = {
+        "feature_request": "fix the endpoint", "target_projects": None,
+        "detected_projects": [
+            {"project_id": "frontend", "exists": True},
+            {"project_id": "backend", "exists": True},
+        ],
+    }
+
+    result = await nodes.classify_projects(runtime, state)
+
+    assert result["relevant_projects"] == ["backend"]
+    assert runtime.classify_calls == [("fix the endpoint", {"frontend", "backend"})]
+
+
+@pytest.mark.asyncio
+async def test_classify_projects_node_filters_the_override_by_existing_projects():
+    runtime = StubClassifyRuntime(relevant=[])
+    state = {
+        "feature_request": "add a button", "target_projects": ["frontend", "python"],
+        "detected_projects": [{"project_id": "frontend", "exists": True}],
+    }
+
+    result = await nodes.classify_projects(runtime, state)
+
+    assert result["relevant_projects"] == ["frontend"]

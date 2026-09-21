@@ -190,8 +190,20 @@ async def discover_projects_node(runtime: ExecutionRuntime, state: dict[str, Any
     missing = [p.expected_name for p in projects if not p.exists]
     if missing:
         state.setdefault("errors", []).append("missing project aliases: " + ", ".join(missing))
-    state["next_action"] = "create_plan"
+    state["next_action"] = "classify_projects"
     return await runtime.persist(state, "discover_projects", "projects.discovered", {"count": len(projects), "missing": missing})
+
+
+async def classify_projects(runtime: ExecutionRuntime, state: dict[str, Any]) -> dict[str, Any]:
+    existing = {p["project_id"] for p in state.get("detected_projects", []) if p.get("exists")}
+    override = state.get("target_projects")
+    if override is not None:
+        relevant = [p for p in override if p in existing]
+    else:
+        relevant = await runtime.classify_relevant_projects(state["feature_request"], existing)
+    state["relevant_projects"] = relevant
+    state["next_action"] = "create_plan"
+    return await runtime.persist(state, "classify_projects", "projects.classified", {"relevant": relevant})
 
 
 async def create_plan(runtime: ExecutionRuntime, state: dict[str, Any]) -> dict[str, Any]:
