@@ -250,6 +250,7 @@ async def dispatch_agents(runtime: ExecutionRuntime, state: dict[str, Any]) -> d
             else:
                 task["status"] = "completed" if result.status == "completed" else result.status
                 task["result"] = result.model_dump(mode="json")
+                task["result"]["prompt_version"] = AGENT_ROLES.get(task["agent"], {}).get("prompt_version")
                 state.setdefault("files_changed", []).extend(result.files_changed)
                 state["token_usage"][task["agent"]] = result.tokens_input + result.tokens_output
                 state["estimated_cost"] += result.estimated_cost

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import sys
 from pathlib import Path
 
 import pytest
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
+from agents.registry import AGENT_ROLES
 from orchestrator import nodes
 from orchestrator.config import Settings
 from orchestrator.graph import OrchestrationGraph
@@ -387,3 +389,51 @@ def test_execution_state_model_defaults_quality_scores_to_an_empty_list():
     model = ExecutionStateModel(execution_id="exec-1", project_id="bezalel", feature_request="add a button")
 
     assert model.quality_scores == []
+
+
+class StampRuntime:
+    """Minimal runtime double — just enough surface for dispatch_agents to run one task."""
+
+    def __init__(self) -> None:
+        self.store = _StampStore()
+
+    def cancel_event(self, execution_id):
+        return asyncio.Event()
+
+    async def prepare_worktree(self, state, project_id):
+        return state
+
+    def workdir_for(self, state, project_id):
+        return Path(".")
+
+    async def run_task(self, state, task):
+        return AgentResult(agent=task["agent"], status="completed", summary="done")
+
+    async def publish(self, event):
+        return None
+
+    async def persist(self, state, node, event=None, payload=None):
+        return state
+
+
+class _StampStore:
+    def event(self, *args, **kwargs):
+        return None
+
+    def agent_run(self, *args, **kwargs):
+        return None
+
+
+@pytest.mark.asyncio
+async def test_dispatch_agents_stamps_the_current_prompt_version_onto_the_result():
+    state = {
+        "execution_id": "execution-t007",
+        "plan": [{"task_id": "T001", "agent": "frontend", "project_id": "frontend",
+                  "status": "pending", "dependencies": [], "description": "add a button"}],
+        "approvals": {}, "worktrees": {}, "token_usage": {}, "estimated_cost": 0.0,
+    }
+
+    result = await nodes.dispatch_agents(StampRuntime(), state)
+
+    task = result["plan"][0]
+    assert task["result"]["prompt_version"] == AGENT_ROLES["frontend"]["prompt_version"]
