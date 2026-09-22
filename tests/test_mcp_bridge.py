@@ -10,7 +10,7 @@ import uvicorn
 
 from api.app import create_app
 from orchestrator.config import Settings
-from orchestrator.mcp_bridge import check_execution, run_feature
+from orchestrator.mcp_bridge import check_execution, resume_execution, run_feature
 
 
 def settings_for(tmp_path: Path) -> Settings:
@@ -86,3 +86,32 @@ async def test_check_execution_reports_unknown_id_as_error(tmp_path: Path) -> No
 
     assert "error" in status
     assert "not found" in status["error"]
+
+
+@pytest.mark.asyncio
+async def test_resume_execution_resumes_a_previously_dispatched_execution(tmp_path: Path) -> None:
+    async with running_api(tmp_path) as base_url:
+        dispatched = await run_feature("teste de resume", dry_run=True, base_url=base_url)
+        await asyncio.sleep(0.2)
+        result = await resume_execution(dispatched["execution_id"], base_url=base_url)
+
+    assert result["execution_id"] == dispatched["execution_id"]
+    assert result["status"] == "resuming"
+
+
+@pytest.mark.asyncio
+async def test_resume_execution_reports_unknown_id_as_error(tmp_path: Path) -> None:
+    async with running_api(tmp_path) as base_url:
+        result = await resume_execution("does-not-exist", base_url=base_url)
+
+    assert "error" in result
+    assert "not found" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_resume_execution_reports_unreachable_api_clearly() -> None:
+    port = await _free_port()
+    result = await resume_execution("some-id", base_url=f"http://127.0.0.1:{port}")
+
+    assert "error" in result
+    assert "unreachable" in result["error"]

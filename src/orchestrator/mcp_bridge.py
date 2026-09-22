@@ -57,6 +57,30 @@ async def check_execution(execution_id: str, base_url: str | None = None) -> dic
     return response.json()
 
 
+async def resume_execution(execution_id: str, base_url: str | None = None) -> dict[str, Any]:
+    """Resume a previously dispatched orchestrator execution from its saved state.
+
+    This re-runs the graph from analyze_request, but create_plan reuses any task that
+    already completed instead of recreating it — a domain agent (or gate agent) that
+    already finished successfully is not redispatched to a real Codex session. Describing
+    "continue execution X" in a feature request's text does NOT do this: that always
+    creates a brand new execution and redoes everything from scratch. This calls the
+    orchestrator's actual resume endpoint for the given execution_id.
+    """
+    url = _base_url(base_url)
+    try:
+        async with httpx.AsyncClient(base_url=url, timeout=10.0) as client:
+            response = await client.post(f"/executions/{execution_id}/resume")
+    except httpx.ConnectError:
+        return {"error": f"Orchestrator API unreachable at {url}. Start it with `bezalel-orchestrator api`."}
+    if response.status_code == 404:
+        return {"error": f"execution {execution_id} not found"}
+    if response.status_code >= 400:
+        return {"error": f"Orchestrator API returned {response.status_code}: {response.text[:500]}"}
+    data = response.json()
+    return {**data, "panel_url": f"{url}/", "events_url": f"{url}/events/view"}
+
+
 mcp = FastMCP("bezalel-orchestrator")
 
 
@@ -87,6 +111,21 @@ async def run_orchestrator_feature(feature_request: str, project_id: str = "beza
 async def check_orchestrator_execution(execution_id: str) -> dict[str, Any]:
     """Check the current status of a previously dispatched orchestrator execution."""
     return await check_execution(execution_id)
+
+
+@mcp.tool()
+async def resume_orchestrator_execution(execution_id: str) -> dict[str, Any]:
+    """Use this whenever the user asks to continue, resume, or pick back up a specific
+    orchestrator execution by id (e.g. "continue execution abc123 from the reviewer") —
+    never call `run_orchestrator_feature` for that, since a new feature request always
+    starts a brand new execution and redoes every already-finished step from scratch
+    (including redispatching a domain agent that already completed its work).
+
+    This calls the orchestrator's real resume mechanism for that execution_id. On resume,
+    a task that already completed successfully is reused as-is instead of being recreated,
+    so only whatever genuinely didn't finish (or never ran) actually gets dispatched again.
+    """
+    return await resume_execution(execution_id)
 
 
 def main() -> None:

@@ -215,33 +215,53 @@ async def classify_projects(runtime: ExecutionRuntime, state: dict[str, Any]) ->
     return await runtime.persist(state, "classify_projects", "projects.classified", {"relevant": relevant, "source": source})
 
 
+def _reuse_if_completed(existing_by_id: dict[str, dict[str, Any]], task_id: str, role: str, project_id: str) -> dict[str, Any] | None:
+    """A resumed execution's state["plan"] already holds the previous run's tasks — a task
+    that already finished successfully must not be recreated (and re-dispatched to a real
+    Codex agent) just because create_plan runs again.
+    """
+    prior = existing_by_id.get(task_id)
+    if prior and prior.get("status") == "completed" and prior.get("agent") == role and prior.get("project_id") == project_id:
+        return prior
+    return None
+
+
 async def create_plan(runtime: ExecutionRuntime, state: dict[str, Any]) -> dict[str, Any]:
+    existing_by_id = {t["task_id"]: t for t in state.get("plan", [])}
     existing = {p["project_id"] for p in state.get("detected_projects", []) if p.get("exists")}
     relevant = existing if state.get("relevant_projects") is None else state["relevant_projects"]
-    tasks: list[TaskSpec] = []
+
+    def build(task_id: str, role: str, project_id: str, description: str, dependencies: list[str], acceptance_criteria: list[str]) -> dict[str, Any]:
+        reused = _reuse_if_completed(existing_by_id, task_id, role, project_id)
+        if reused is not None:
+            return reused
+        return TaskSpec(task_id=task_id, agent=role, project_id=project_id, description=description,
+                        dependencies=dependencies, acceptance_criteria=acceptance_criteria).model_dump(mode="json")
+
+    tasks: list[dict[str, Any]] = []
     for number, (role, project, description) in enumerate([
         ("frontend", "frontend", "Implement the frontend portion of the feature using the detected stack and design system."),
         ("backend", "backend", "Implement backend/API/domain changes and preserve current AWS and authorization conventions."),
         ("python_ai", "python", "Implement Python/LangGraph workflow or prompt changes required by the feature."),
     ], 1):
         if project in existing and project in relevant:
-            tasks.append(TaskSpec(task_id=f"T{number:03d}", agent=role, project_id=project, description=description,
-                                  acceptance_criteria=["Return changed files", "Return validation evidence", "Do not expose secrets"]))
-    base_ids = [task.task_id for task in tasks]
+            tasks.append(build(f"T{number:03d}", role, project, description, [],
+                               ["Return changed files", "Return validation evidence", "Do not expose secrets"]))
+    base_ids = [task["task_id"] for task in tasks]
     tasks.extend([
-        TaskSpec(task_id="T010", agent="contracts", project_id="backend", description="Validate API, event and serialized payload contracts across affected projects.", dependencies=base_ids,
-                 acceptance_criteria=["No blocking breaking change remains", "Exact JSON casing and nullability checked"]),
-        TaskSpec(task_id="T011", agent="qa", project_id="backend", description="Run the relevant tests and add focused coverage only where required.", dependencies=base_ids + ["T010"],
-                 acceptance_criteria=["Required tests pass", "Failures classified"]),
-        TaskSpec(task_id="T012", agent="security", project_id="backend", description="Review secrets, cloud permissions, logs, environment handling and deployment risk.", dependencies=base_ids,
-                 acceptance_criteria=["No blocking secret or cloud finding"]),
-        TaskSpec(task_id="T013", agent="reviewer", project_id="backend", description="Review the resulting diff, tests, observability and compatibility.", dependencies=["T010", "T011", "T012"],
-                 acceptance_criteria=["No blocking review finding"]),
+        build("T010", "contracts", "backend", "Validate API, event and serialized payload contracts across affected projects.", base_ids,
+              ["No blocking breaking change remains", "Exact JSON casing and nullability checked"]),
+        build("T011", "qa", "backend", "Run the relevant tests and add focused coverage only where required.", base_ids + ["T010"],
+              ["Required tests pass", "Failures classified"]),
+        build("T012", "security", "backend", "Review secrets, cloud permissions, logs, environment handling and deployment risk.", base_ids,
+              ["No blocking secret or cloud finding"]),
+        build("T013", "reviewer", "backend", "Review the resulting diff, tests, observability and compatibility.", ["T010", "T011", "T012"],
+              ["No blocking review finding"]),
     ])
-    state["plan"] = [task.model_dump(mode="json") for task in tasks]
-    state["dependencies"] = {task.task_id: task.dependencies for task in tasks}
+    state["plan"] = tasks
+    state["dependencies"] = {task["task_id"]: task.get("dependencies", []) for task in tasks}
     state["next_action"] = "resolve_dependencies"
-    return await runtime.persist(state, "create_plan", "plan.created", {"tasks": [t.task_id for t in tasks]})
+    return await runtime.persist(state, "create_plan", "plan.created", {"tasks": [task["task_id"] for task in tasks]})
 
 
 async def resolve_dependencies(runtime: ExecutionRuntime, state: dict[str, Any]) -> dict[str, Any]:

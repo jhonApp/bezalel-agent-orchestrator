@@ -252,3 +252,66 @@ async def test_relevant_projects_source_survives_a_real_langgraph_state_channel(
     graph = builder.compile()
 
     await graph.ainvoke({})
+
+
+def test_create_plan_reuses_a_task_that_already_completed_instead_of_recreating_it():
+    """On a resumed execution, state["plan"] already holds the previous run's tasks — a task
+    that already finished successfully must not be recreated (and re-dispatched to a real
+    Codex agent) just because create_plan runs again."""
+    prior_task = {
+        "task_id": "T001", "agent": "frontend", "project_id": "frontend", "status": "completed",
+        "description": "old description", "dependencies": [], "attempts": 2,
+        "worktree": "/some/worktree", "branch": "codex/exec-1/frontend",
+        "result": {"summary": "already done", "files_changed": ["src/x.tsx"]},
+    }
+    state = {
+        "plan": [prior_task],
+        "detected_projects": [{"project_id": "frontend", "exists": True}],
+        "relevant_projects": ["frontend"],
+    }
+
+    result = asyncio.run(nodes.create_plan(StubPersistRuntime(), state))
+
+    frontend_task = next(t for t in result["plan"] if t["agent"] == "frontend")
+    assert frontend_task["status"] == "completed"
+    assert frontend_task["result"]["summary"] == "already done"
+    assert frontend_task["worktree"] == "/some/worktree"
+
+
+def test_create_plan_recreates_a_task_that_did_not_complete():
+    prior_task = {
+        "task_id": "T001", "agent": "frontend", "project_id": "frontend", "status": "failed",
+        "description": "old description", "dependencies": [], "attempts": 3,
+        "result": {"summary": "it broke"},
+    }
+    state = {
+        "plan": [prior_task],
+        "detected_projects": [{"project_id": "frontend", "exists": True}],
+        "relevant_projects": ["frontend"],
+    }
+
+    result = asyncio.run(nodes.create_plan(StubPersistRuntime(), state))
+
+    frontend_task = next(t for t in result["plan"] if t["agent"] == "frontend")
+    assert frontend_task["status"] == "pending"
+    assert frontend_task["attempts"] == 0
+    assert frontend_task["result"] == {}
+
+
+def test_create_plan_reuses_a_completed_gate_task_too():
+    prior_reviewer = {
+        "task_id": "T013", "agent": "reviewer", "project_id": "backend", "status": "completed",
+        "description": "old", "dependencies": ["T010", "T011", "T012"],
+        "result": {"summary": "approved, no findings"},
+    }
+    state = {
+        "plan": [prior_reviewer],
+        "detected_projects": [{"project_id": "frontend", "exists": True}],
+        "relevant_projects": ["frontend"],
+    }
+
+    result = asyncio.run(nodes.create_plan(StubPersistRuntime(), state))
+
+    reviewer_task = next(t for t in result["plan"] if t["agent"] == "reviewer")
+    assert reviewer_task["status"] == "completed"
+    assert reviewer_task["result"]["summary"] == "approved, no findings"
