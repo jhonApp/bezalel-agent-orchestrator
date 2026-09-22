@@ -405,6 +405,9 @@ async def _run_gate_agent_across_projects(runtime: ExecutionRuntime, state: dict
         summary="; ".join(f"[{project}] {r.summary}" for project, r in zip(changed_projects, per_project)),
         errors=[err for r in per_project for err in r.errors],
         files_changed=[f for r in per_project for f in r.files_changed],
+        tokens_input=sum(r.tokens_input for r in per_project),
+        tokens_output=sum(r.tokens_output for r in per_project),
+        estimated_cost=sum(r.estimated_cost for r in per_project),
     )
 
 

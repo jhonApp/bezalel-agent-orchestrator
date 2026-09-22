@@ -63,6 +63,44 @@ class RecordingRuntime:
         self.announced_finished.append(task["project_id"])
 
 
+class TokenAwareRuntime:
+    """Stub whose run_task returns a distinct real token/cost figure per project, to prove
+    _run_gate_agent_across_projects sums them into the merged result instead of discarding
+    them — the same class of bug already fixed for the `quality` field."""
+
+    def __init__(self) -> None:
+        self._by_project = {
+            "frontend": AgentResult(agent="reviewer", status="completed", summary="ok frontend",
+                                    tokens_input=1000, tokens_output=100, estimated_cost=0.01),
+            "backend": AgentResult(agent="reviewer", status="completed", summary="ok backend",
+                                   tokens_input=2000, tokens_output=200, estimated_cost=0.02),
+        }
+
+    async def run_task(self, state, task):
+        return self._by_project[task["project_id"]]
+
+    def workdir_for(self, state, project_id):
+        return Path(".")
+
+    async def announce_agent_started(self, state, task):
+        return None
+
+    async def announce_agent_finished(self, state, task):
+        return None
+
+
+@pytest.mark.asyncio
+async def test_run_gate_agent_across_projects_sums_real_tokens_and_cost_across_projects():
+    task = {"task_id": "T013", "agent": "reviewer", "status": "pending", "description": "review the diff"}
+    state = {"worktrees": {}}
+
+    result = await nodes._run_gate_agent_across_projects(TokenAwareRuntime(), state, task, ["frontend", "backend"])
+
+    assert result.tokens_input == 3000
+    assert result.tokens_output == 300
+    assert result.estimated_cost == pytest.approx(0.03)
+
+
 @pytest.mark.asyncio
 async def test_contract_validation_completes_without_agent_when_no_files_changed(monkeypatch):
     async def no_changed_projects(runtime, state):
