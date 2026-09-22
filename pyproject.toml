@@ -33,6 +33,7 @@ mcp = [
 [project.scripts]
 bezalel-orchestrator = "orchestrator.main:cli"
 bezalel-orchestrator-mcp = "orchestrator.mcp_bridge:main"
+bezalel-wake-listener = "wake_listener.main:cli"
 
 [tool.setuptools.packages.find]
 where = ["src"]
