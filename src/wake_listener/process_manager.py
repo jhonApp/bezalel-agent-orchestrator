@@ -16,11 +16,13 @@ class ProcessManager:
     """
 
     def __init__(self, start_command: list[str], health_url: str,
-                health_timeout_seconds: float = 30.0, health_poll_interval_seconds: float = 0.5) -> None:
+                health_timeout_seconds: float = 30.0, health_poll_interval_seconds: float = 0.5,
+                cwd: str | None = None) -> None:
         self.start_command = start_command
         self.health_url = health_url
         self.health_timeout_seconds = health_timeout_seconds
         self.health_poll_interval_seconds = health_poll_interval_seconds
+        self.cwd = cwd
         self._process: subprocess.Popen | None = None
 
     def is_running(self) -> bool:
@@ -31,7 +33,7 @@ class ProcessManager:
             return
         if await self._is_healthy():
             return
-        self._process = subprocess.Popen(self.start_command)
+        self._process = subprocess.Popen(self.start_command, cwd=self.cwd)
         try:
             await self._wait_healthy()
         except TimeoutError:

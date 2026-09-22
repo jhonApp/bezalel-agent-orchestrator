@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 from pydantic import BaseModel, Field
 
@@ -34,6 +35,7 @@ class WakeListenerSettings(BaseModel):
     idle_check_interval_seconds: float = 60.0
     auth_token: str | None = None
     cors_allowed_origins: list[str] = Field(default_factory=lambda: [DEFAULT_CORS_ORIGIN])
+    backend_cwd: str = Field(default_factory=lambda: str(Path(__file__).resolve().parents[2]))
 
     @property
     def backend_base_url(self) -> str:
@@ -63,4 +65,5 @@ class WakeListenerSettings(BaseModel):
             idle_check_interval_seconds=_float("WAKE_IDLE_CHECK_INTERVAL_SECONDS", 60.0),
             auth_token=(os.getenv("WAKE_LISTENER_TOKEN", "").strip() or None),
             cors_allowed_origins=origins.split(",") if origins else [DEFAULT_CORS_ORIGIN],
+            backend_cwd=os.getenv("WAKE_BACKEND_CWD", "").strip() or str(Path(__file__).resolve().parents[2]),
         )

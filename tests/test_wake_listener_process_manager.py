@@ -125,3 +125,57 @@ async def test_stop_if_idle_stops_only_the_process_it_spawned(fake_backend_comma
     assert stopped is True
     assert not manager.is_running()
     assert not await manager._is_healthy()
+
+
+CWD_MARKER_BACKEND_SCRIPT = r'''
+import os
+import pathlib
+import sys
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(b'{"ok": true}')
+
+    def log_message(self, *args):
+        pass
+
+
+port = int(sys.argv[1])
+marker_path = sys.argv[2]
+pathlib.Path(marker_path).write_text(os.getcwd())
+HTTPServer(("127.0.0.1", port), Handler).serve_forever()
+'''
+
+
+@pytest.mark.asyncio
+async def test_ensure_awake_spawns_the_backend_with_the_configured_cwd(tmp_path: Path):
+    """Reproduces Finding 1: the spawned backend must run with an explicit cwd,
+    not whatever cwd the parent (e.g. Task Scheduler) happens to default to."""
+    script_dir = tmp_path / "script_dir"
+    script_dir.mkdir()
+    script = script_dir / "cwd_marker_backend.py"
+    script.write_text(CWD_MARKER_BACKEND_SCRIPT, encoding="utf-8")
+
+    desired_cwd = tmp_path / "desired_cwd"
+    desired_cwd.mkdir()
+    marker_path = tmp_path / "marker.txt"
+
+    port = free_port()
+    command = [sys.executable, str(script), str(port), str(marker_path)]
+    manager = ProcessManager(
+        start_command=command, health_url=f"http://127.0.0.1:{port}/",
+        health_timeout_seconds=10, cwd=str(desired_cwd),
+    )
+
+    try:
+        await manager.ensure_awake()
+        assert manager.is_running()
+        recorded_cwd = marker_path.read_text().strip()
+        assert Path(recorded_cwd).resolve() == desired_cwd.resolve()
+    finally:
+        manager.stop_if_idle()

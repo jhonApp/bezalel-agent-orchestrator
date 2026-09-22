@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from typing import Any, AsyncIterator
 
 import httpx
@@ -26,7 +26,7 @@ def create_app(settings: WakeListenerSettings, process_manager: ProcessManager |
               tracker: ActivityTracker | None = None) -> FastAPI:
     process_manager = process_manager or ProcessManager(
         start_command=settings.backend_start_command, health_url=settings.health_url,
-        health_timeout_seconds=settings.backend_health_timeout_seconds,
+        health_timeout_seconds=settings.backend_health_timeout_seconds, cwd=settings.backend_cwd,
     )
     tracker = tracker or ActivityTracker()
 
@@ -37,13 +37,16 @@ def create_app(settings: WakeListenerSettings, process_manager: ProcessManager |
         async def idle_loop() -> None:
             while True:
                 await asyncio.sleep(settings.idle_check_interval_seconds)
-                await _idle_tick(tracker, process_manager, settings.idle_timeout_seconds)
+                await _idle_tick(tracker, process_manager, settings.idle_timeout_seconds, settings.backend_base_url)
 
         task = asyncio.create_task(idle_loop())
         try:
             yield
         finally:
             task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+            process_manager.stop_if_idle()
 
     app = FastAPI(lifespan=lifespan)
     app.state.process_manager = process_manager
@@ -109,17 +112,32 @@ def create_app(settings: WakeListenerSettings, process_manager: ProcessManager |
     return app
 
 
-async def run_idle_check_once(tracker: ActivityTracker, process_manager: ProcessManager,
-                              idle_timeout_seconds: float) -> bool:
-    if tracker.is_idle(idle_timeout_seconds):
-        return process_manager.stop_if_idle()
-    return False
-
-
-async def _idle_tick(tracker: ActivityTracker, process_manager: ProcessManager,
-                     idle_timeout_seconds: float) -> None:
+async def _backend_has_active_work(backend_base_url: str) -> bool:
     try:
-        await run_idle_check_once(tracker, process_manager, idle_timeout_seconds)
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            response = await client.get(f"{backend_base_url}/dashboard-data")
+        if response.status_code != 200:
+            return False
+        data = response.json()
+        running = data.get("executions", {}).get("running", 0)
+        return bool(running) or bool(data.get("active_agents"))
+    except httpx.HTTPError:
+        return False
+
+
+async def run_idle_check_once(tracker: ActivityTracker, process_manager: ProcessManager,
+                              idle_timeout_seconds: float, backend_base_url: str | None = None) -> bool:
+    if not tracker.is_idle(idle_timeout_seconds):
+        return False
+    if backend_base_url and await _backend_has_active_work(backend_base_url):
+        return False
+    return process_manager.stop_if_idle()
+
+
+async def _idle_tick(tracker: ActivityTracker, process_manager: ProcessManager, idle_timeout_seconds: float,
+                     backend_base_url: str | None = None) -> None:
+    try:
+        await run_idle_check_once(tracker, process_manager, idle_timeout_seconds, backend_base_url)
     except Exception:
         logger.exception("wake listener idle check failed; will retry next interval")
 

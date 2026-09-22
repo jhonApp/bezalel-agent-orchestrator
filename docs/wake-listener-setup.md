@@ -25,6 +25,7 @@ itself, so export these in the shell/service environment instead):
 | `WAKE_BACKEND_HEALTH_PATH` | `/dashboard-data` | path polled to decide whether the backend is awake |
 | `WAKE_BACKEND_HEALTH_TIMEOUT_SECONDS` | `30` | how long to wait for the backend to become healthy after spawning it |
 | `WAKE_BACKEND_START_COMMAND` | `bezalel-orchestrator,api` | comma-separated command used to spawn the backend |
+| `WAKE_BACKEND_CWD` | the repository root | working directory the spawned backend runs from — critical if you run the listener from a service/scheduler whose default cwd is not the repo root |
 
 ## 2. Run the listener
 

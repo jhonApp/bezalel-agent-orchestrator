@@ -217,3 +217,99 @@ async def test_idle_tick_swallows_exceptions_from_a_failing_stop_if_idle():
     now[0] = 10_000.0
 
     await _idle_tick(tracker, _RaisingProcessManager(), idle_timeout_seconds=60)
+
+
+@pytest.mark.asyncio
+async def test_lifespan_shutdown_stops_a_backend_it_had_spawned(tmp_path: Path):
+    """Finding 2: if the listener spawned the backend (e.g. from an earlier
+    proxied request) and the listener process itself then restarts, shutdown
+    must stop the backend it owns rather than leaking it permanently."""
+    app, process_manager = build_wired_app(tmp_path)
+    try:
+        await process_manager.ensure_awake()
+        assert process_manager.is_running()
+
+        async with app.router.lifespan_context(app):
+            pass
+
+        assert not process_manager.is_running()
+    finally:
+        process_manager.stop_if_idle()
+
+
+DASHBOARD_DATA_BACKEND_SCRIPT = r'''
+import sys
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(RUNNING_BODY)
+
+    def log_message(self, *args):
+        pass
+
+
+port = int(sys.argv[1])
+HTTPServer(("127.0.0.1", port), Handler).serve_forever()
+'''
+
+
+def build_dashboard_backend_command(tmp_path: Path, running: int) -> tuple[list[str], str]:
+    body = ('{"executions": {"running": %d}, "active_agents": []}' % running).encode()
+    script_source = DASHBOARD_DATA_BACKEND_SCRIPT.replace("RUNNING_BODY", repr(body))
+    script = tmp_path / f"dashboard_backend_{running}.py"
+    script.write_text(script_source, encoding="utf-8")
+    port = free_port()
+    return [sys.executable, str(script), str(port)], f"http://127.0.0.1:{port}"
+
+
+@pytest.mark.asyncio
+async def test_run_idle_check_once_does_not_stop_a_backend_with_an_active_execution(tmp_path: Path):
+    """Finding 4: even though the tracker itself is idle, a backend reporting
+    an in-flight execution via /dashboard-data must not be stopped."""
+    command, base_url = build_dashboard_backend_command(tmp_path, running=1)
+    process_manager = ProcessManager(
+        start_command=command, health_url=f"{base_url}/", health_timeout_seconds=10,
+    )
+    now = [0.0]
+    tracker = ActivityTracker(clock=lambda: now[0])
+    try:
+        await process_manager.ensure_awake()
+        now[0] = 10_000.0
+
+        stopped = await run_idle_check_once(
+            tracker, process_manager, idle_timeout_seconds=0, backend_base_url=base_url,
+        )
+
+        assert stopped is False
+        assert process_manager.is_running()
+    finally:
+        process_manager.stop_if_idle()
+
+
+@pytest.mark.asyncio
+async def test_run_idle_check_once_stops_a_genuinely_idle_backend_with_no_active_work(tmp_path: Path):
+    """Finding 4 counterpart: a backend reporting zero running executions and no
+    active agents must still be stopped once the tracker is idle."""
+    command, base_url = build_dashboard_backend_command(tmp_path, running=0)
+    process_manager = ProcessManager(
+        start_command=command, health_url=f"{base_url}/", health_timeout_seconds=10,
+    )
+    now = [0.0]
+    tracker = ActivityTracker(clock=lambda: now[0])
+    try:
+        await process_manager.ensure_awake()
+        now[0] = 10_000.0
+
+        stopped = await run_idle_check_once(
+            tracker, process_manager, idle_timeout_seconds=0, backend_base_url=base_url,
+        )
+
+        assert stopped is True
+        assert not process_manager.is_running()
+    finally:
+        process_manager.stop_if_idle()
