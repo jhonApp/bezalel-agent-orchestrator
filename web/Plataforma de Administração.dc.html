@@ -244,6 +244,9 @@
                 <span style="display:inline-flex; align-items:center; gap:6px; font-size:10.5px; text-transform:uppercase; letter-spacing:0.04em; padding:4px 8px; border:1px solid {{ a.statusColor }}; color:{{ a.statusColor }}; font-weight:700;">
                   <span style="width:6px; height:6px; background:{{ a.statusColor }}; display:inline-block;"></span>{{ a.statusLabel }}
                 </span>
+                <sc-if value="{{ a.hasStatusExecHint }}" hint-placeholder-val="{{ false }}">
+                  <div style="font-size:9.5px; color:#5A564C; text-transform:uppercase; letter-spacing:0.03em; margin-top:4px;">{{ a.statusExecHint }} — não a execução em foco</div>
+                </sc-if>
                 <sc-if value="{{ a.hasLiveLine }}" hint-placeholder-val="{{ false }}">
                   <div title="{{ a.liveLine }}" style="font-size:10px; color:{{ a.liveLineColor }}; margin-top:8px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">▸ {{ a.liveLine }}</div>
                 </sc-if>
@@ -269,6 +272,9 @@
                 <span style="display:inline-flex; align-items:center; gap:6px; font-size:10.5px; text-transform:uppercase; letter-spacing:0.04em; padding:4px 8px; border:1px solid {{ selectedAgent.statusColor }}; color:{{ selectedAgent.statusColor }}; font-weight:700; margin-top:6px;">
                   <span style="width:6px; height:6px; background:{{ selectedAgent.statusColor }}; display:inline-block;"></span>{{ selectedAgent.statusLabel }}
                 </span>
+                <sc-if value="{{ selectedAgent.hasStatusExecHint }}" hint-placeholder-val="{{ false }}">
+                  <div style="font-size:9.5px; color:#5A564C; text-transform:uppercase; letter-spacing:0.03em; margin-top:4px;">{{ selectedAgent.statusExecHint }} — não a execução em foco</div>
+                </sc-if>
               </div>
             </div>
 
@@ -931,11 +937,17 @@ class Component extends DCLogic {
         // approximation, which is still real backend data (tokens/retries/conflicts/compaction),
         // unlike the old "100 - failures*22" formula it replaces.
         const latestContextHealthByAgent = {};
-        (data.items || []).forEach(function (item) {
+        // A card's status can come from a much older, unrelated execution — the agent hasn't
+        // run again since, so its "latest" task is whatever that old run left behind. Tracking
+        // which execution it came from lets the card say so instead of implying it's about
+        // whatever the person is currently watching.
+        const latestExecTagByAgent = {};
+        (data.items || []).forEach(function (item, index) {
           (item.tasks || []).forEach(function (t) {
             if (!(t.agent in latestStatusByAgent)) {
               latestStatusByAgent[t.agent] = t.status;
               latestContextHealthByAgent[t.agent] = item.context_health || {};
+              latestExecTagByAgent[t.agent] = "EXEC-" + (index + 1);
             }
           });
         });
@@ -945,12 +957,14 @@ class Component extends DCLogic {
           const statusKey = latestStatus === "rate_limited" ? "rate_limited"
             : (latestStatus === "failed" || latestStatus === "blocked") ? "attention" : "idle";
           const health = Component.computeAgentHealth(latestContextHealthByAgent[agent.key]);
+          const statusExecTag = latestExecTagByAgent[agent.key] || null;
           if (!metric) return Object.assign({}, agent, {
             execCount: 0,
             success: 0,
             fail: 0,
             totalMin: 0,
             statusKey: statusKey,
+            statusExecTag: statusExecTag,
             healthScore: health.score,
             healthReasons: health.reasons,
           });
@@ -960,6 +974,7 @@ class Component extends DCLogic {
             fail: metric.failed,
             totalMin: Math.max(0, Math.round(metric.duration_seconds / 60)),
             statusKey: statusKey,
+            statusExecTag: statusExecTag,
             healthScore: health.score,
             healthReasons: health.reasons,
           });
@@ -1165,6 +1180,10 @@ class Component extends DCLogic {
       };
       const live = liveAgents[a.key];
       const st = statusMap[(live && live.statusKey) || a.statusKey] || statusMap.idle;
+      // Only "attention"/"rate_limited" get misread as being about whatever execution is on
+      // screen right now — idle needs no attribution, and a truly live status is unambiguous.
+      const showStatusExecHint = !live && (a.statusKey === "attention" || a.statusKey === "rate_limited") && a.statusExecTag;
+      const statusExecHint = showStatusExecHint ? ("de " + a.statusExecTag) : "";
       const activity = self.state.agentActivity[a.key];
       const costPct = totalMin ? Math.round((a.totalMin / totalMin) * 100) : 0;
       const runs = executionDefs.filter(function (e) { return e.agentKeys.indexOf(a.key) !== -1; }).map(function (e) {
@@ -1184,7 +1203,7 @@ class Component extends DCLogic {
         successRate: successRate, totalMin: a.totalMin + " min", healthScore: healthScore, healthColor: healthColor, healthLabel: healthLabel,
         healthReasonsList: healthReasons.map(function (r, i) { return { key: a.key + "-reason-" + i, text: Component.REASON_LABELS[r] || r }; }),
         hasHealthReasons: healthReasons.length > 0,
-        statusLabel: st.label, statusColor: st.color,
+        statusLabel: st.label, statusColor: st.color, statusExecHint: statusExecHint, hasStatusExecHint: !!statusExecHint,
         costPct: costPct, costShare: a.execCount ? (a.totalMin + " min") : "sem custo",
         runs: runs,
         liveLine: activity ? activity.lastLine : null,
