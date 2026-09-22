@@ -20,7 +20,11 @@ itself, so export these in the shell/service environment instead):
 | `WAKE_BACKEND_PORT` | `8000` | must match `bezalel-orchestrator api`'s `--port` |
 | `WAKE_LISTENER_TOKEN` | *(none — auth disabled)* | shared secret; **set this before exposing publicly** |
 | `WAKE_IDLE_TIMEOUT_MINUTES` | `20` | how long with no activity before the backend is stopped |
+| `WAKE_IDLE_CHECK_INTERVAL_SECONDS` | `60` | how often the idle check runs |
 | `WAKE_CORS_ALLOWED_ORIGINS` | `https://vercel-deploy-orchestrator.vercel.app` | comma-separated list of dashboard origins allowed to call this listener |
+| `WAKE_BACKEND_HEALTH_PATH` | `/dashboard-data` | path polled to decide whether the backend is awake |
+| `WAKE_BACKEND_HEALTH_TIMEOUT_SECONDS` | `30` | how long to wait for the backend to become healthy after spawning it |
+| `WAKE_BACKEND_START_COMMAND` | `bezalel-orchestrator,api` | comma-separated command used to spawn the backend |
 
 ## 2. Run the listener
 
@@ -79,3 +83,9 @@ curl -H "Authorization: Bearer <token>" https://<your-static-domain>.ngrok-free.
 The first call after a period of inactivity takes a few seconds (the listener
 is spawning and health-checking the real backend); subsequent calls are fast
 until the idle timeout elapses again.
+
+**Note on `/events` (SSE):** the browser's `EventSource` API cannot set custom
+headers, so the dashboard sends the token as a `?token=<token>` query
+parameter for that one path instead of a header — this is a narrow, deliberate
+exception: every other path still requires the `Authorization: Bearer <token>`
+header and rejects a query-string token.
