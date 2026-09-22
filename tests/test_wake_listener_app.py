@@ -313,3 +313,31 @@ async def test_run_idle_check_once_stops_a_genuinely_idle_backend_with_no_active
         assert not process_manager.is_running()
     finally:
         process_manager.stop_if_idle()
+
+
+@pytest.mark.asyncio
+async def test_run_idle_check_once_does_not_stop_when_the_active_work_check_itself_fails(tmp_path: Path):
+    """Final-review finding: a failed /dashboard-data probe (timeout, connection error,
+    non-200) must be treated as "assume busy, don't stop" — not "assume idle, go ahead" —
+    since a backend genuinely busy running Codex is exactly the one most likely to miss a
+    health-check deadline. Getting this backwards would silently disable the finding-4
+    protection precisely when it matters most."""
+    command, health_base_url = build_dashboard_backend_command(tmp_path, running=0)
+    process_manager = ProcessManager(
+        start_command=command, health_url=f"{health_base_url}/", health_timeout_seconds=10,
+    )
+    dead_base_url = f"http://127.0.0.1:{free_port()}"
+    now = [0.0]
+    tracker = ActivityTracker(clock=lambda: now[0])
+    try:
+        await process_manager.ensure_awake()
+        now[0] = 10_000.0
+
+        stopped = await run_idle_check_once(
+            tracker, process_manager, idle_timeout_seconds=0, backend_base_url=dead_base_url,
+        )
+
+        assert stopped is False, "an unreachable active-work check must fail toward 'busy', not 'idle'"
+        assert process_manager.is_running()
+    finally:
+        process_manager.stop_if_idle()

@@ -113,16 +113,22 @@ def create_app(settings: WakeListenerSettings, process_manager: ProcessManager |
 
 
 async def _backend_has_active_work(backend_base_url: str) -> bool:
+    """Any failure to get a clear answer is treated as "busy, don't stop" — the cost of a
+    wrong "busy" is one extra idle-check interval of uptime; the cost of a wrong "idle" is
+    a destroyed execution. A backend genuinely saturated running Codex is exactly the
+    backend most likely to blow a health-check timeout, so timing out must not be read as
+    "nothing is running."
+    """
     try:
-        async with httpx.AsyncClient(timeout=3.0) as client:
+        async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.get(f"{backend_base_url}/dashboard-data")
         if response.status_code != 200:
-            return False
+            return True
         data = response.json()
         running = data.get("executions", {}).get("running", 0)
         return bool(running) or bool(data.get("active_agents"))
-    except httpx.HTTPError:
-        return False
+    except Exception:
+        return True
 
 
 async def run_idle_check_once(tracker: ActivityTracker, process_manager: ProcessManager,
