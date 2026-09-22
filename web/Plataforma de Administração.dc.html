@@ -967,13 +967,26 @@ class Component extends DCLogic {
   };
 
   componentDidMount() {
+    this.apiBase = localStorage.getItem("wakeApiBase") || "";
+    this.apiToken = localStorage.getItem("wakeApiToken") || "";
+    if (!this.apiBase && location.hostname.endsWith("vercel.app")) {
+      const base = window.prompt("URL do Wake Listener (ex: https://seunome.ngrok-free.app):", "");
+      if (base) {
+        const token = window.prompt("Token de acesso do Wake Listener:", "") || "";
+        this.apiBase = base.replace(/\/$/, "");
+        this.apiToken = token;
+        localStorage.setItem("wakeApiBase", this.apiBase);
+        localStorage.setItem("wakeApiToken", this.apiToken);
+      }
+    }
     this.refreshDashboard();
     this.refreshQuality();
     this._dashboardPoll = setInterval(() => {
       this.refreshDashboard();
       if (this.state.view === "quality") this.refreshQuality();
     }, 2000);
-    this.eventSource = new EventSource("/events");
+    const eventsUrl = this.apiUrl("/events") + (this.apiToken ? "?token=" + encodeURIComponent(this.apiToken) : "");
+    this.eventSource = new EventSource(eventsUrl);
     this.eventSource.addEventListener("orchestration", (message) => {
       const event = JSON.parse(message.data);
       this.handlePipelineEvent(event);
@@ -1074,7 +1087,7 @@ class Component extends DCLogic {
   }
 
   refreshDashboard() {
-    fetch("/dashboard-data")
+    fetch(this.apiUrl("/dashboard-data"), { headers: this.authHeaders() })
       .then((response) => response.ok ? response.json() : Promise.reject(new Error("dashboard-data unavailable")))
       .then((data) => {
         const metrics = Object.fromEntries(data.agents.map((item) => [item.agent, item]));
@@ -1172,7 +1185,7 @@ class Component extends DCLogic {
   }
 
   refreshQuality() {
-    fetch("/quality-data")
+    fetch(this.apiUrl("/quality-data"), { headers: this.authHeaders() })
       .then((response) => response.ok ? response.json() : Promise.reject(new Error("quality-data unavailable")))
       .then((data) => { this.setState({ qualityData: data }); })
       .catch(() => {});
@@ -1195,7 +1208,7 @@ class Component extends DCLogic {
   loadSkills(projectId) {
     if (!projectId) return;
     this.setState((s) => ({ skillsLoading: Object.assign({}, s.skillsLoading, { [projectId]: true }) }));
-    fetch("/projects/" + projectId + "/skills")
+    fetch(this.apiUrl("/projects/" + projectId + "/skills"), { headers: this.authHeaders() })
       .then((r) => r.json())
       .then((data) => {
         this.setState((s) => ({
@@ -1247,8 +1260,8 @@ class Component extends DCLogic {
     }
     if (!pkg) { this.showToast("Informe o pacote/repositório da skill (ex: anthropics/skills)."); return; }
     this.setState({ skillBusy: true });
-    fetch("/projects/" + projectId + "/skills", {
-      method: "POST", headers: { "Content-Type": "application/json" },
+    fetch(this.apiUrl("/projects/" + projectId + "/skills"), {
+      method: "POST", headers: this.authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({ package: pkg, skill: skillName || null }),
     })
       .then((r) => r.json())
@@ -1282,7 +1295,7 @@ class Component extends DCLogic {
   removeSkill(projectId, skillName) {
     const self = this;
     this.setState({ skillBusy: true, removeConfirm: null });
-    fetch("/projects/" + projectId + "/skills/" + encodeURIComponent(skillName), { method: "DELETE" })
+    fetch(this.apiUrl("/projects/" + projectId + "/skills/" + encodeURIComponent(skillName)), { method: "DELETE", headers: this.authHeaders() })
       .then((r) => r.json())
       .then(function (result) {
         self.setState({ skillBusy: false });
@@ -1487,6 +1500,16 @@ class Component extends DCLogic {
       color: active ? "#14140F" : "rgba(255,255,255,0.6)",
       fontWeight: active ? 800 : 600,
     };
+  }
+
+  apiUrl(path) {
+    return (this.apiBase || "") + path;
+  }
+
+  authHeaders(extra) {
+    const headers = Object.assign({}, extra || {});
+    if (this.apiToken) headers["Authorization"] = "Bearer " + this.apiToken;
+    return headers;
   }
 
   renderVals() {
