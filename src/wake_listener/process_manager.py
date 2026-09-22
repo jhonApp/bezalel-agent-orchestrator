@@ -32,7 +32,11 @@ class ProcessManager:
         if await self._is_healthy():
             return
         self._process = subprocess.Popen(self.start_command)
-        await self._wait_healthy()
+        try:
+            await self._wait_healthy()
+        except TimeoutError:
+            self.stop_if_idle()
+            raise
 
     async def _is_healthy(self) -> bool:
         try:

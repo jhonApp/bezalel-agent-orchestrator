@@ -97,6 +97,24 @@ async def test_ensure_awake_raises_timeout_error_when_the_backend_never_becomes_
 
 
 @pytest.mark.asyncio
+async def test_ensure_awake_cleans_up_the_process_it_spawned_when_health_check_times_out():
+    dead_port = free_port()
+    manager = ProcessManager(
+        start_command=[sys.executable, "-c", "import time; time.sleep(5)"],
+        health_url=f"http://127.0.0.1:{dead_port}/never-listens",
+        health_timeout_seconds=0.5, health_poll_interval_seconds=0.1,
+    )
+
+    try:
+        with pytest.raises(TimeoutError):
+            await manager.ensure_awake()
+
+        assert not manager.is_running(), "process must be cleaned up when health-check times out"
+    finally:
+        manager.stop_if_idle()
+
+
+@pytest.mark.asyncio
 async def test_stop_if_idle_stops_only_the_process_it_spawned(fake_backend_command):
     command, port = fake_backend_command
     manager = ProcessManager(start_command=command, health_url=f"http://127.0.0.1:{port}/", health_timeout_seconds=10)
