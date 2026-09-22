@@ -391,6 +391,60 @@
       </sc-if>
     </sc-if>
 
+    <!-- ===================== NÓS (PIPELINE) ===================== -->
+    <sc-if value="{{ isPipeline }}" hint-placeholder-val="{{ false }}">
+      <div data-screen-label="Nós" style="max-width:1180px;">
+        <div style="margin-bottom:22px; border-bottom:2px solid #14140F; padding-bottom:14px;">
+          <h1 style="font-size:26px; font-weight:800; margin:0 0 5px; text-transform:uppercase;">Pipeline: os 16 nós do grafo</h1>
+          <p style="font-size:12.5px; color:#5A564C; margin:0;">Cada card é um nó do LangGraph (orchestrator/nodes.py), na ordem em que roda. Status e tokens atualizam ao vivo via SSE — sem polling.</p>
+        </div>
+
+        <sc-if value="{{ hasPipelineExec }}" hint-placeholder-val="{{ false }}">
+          <div style="display:inline-flex; align-items:center; gap:8px; margin-bottom:20px; border:1px solid #35C7B9; padding:6px 12px;">
+            <span style="width:7px; height:7px; border-radius:50%; background:#35C7B9;"></span>
+            <span style="font-size:10.5px; text-transform:uppercase; letter-spacing:0.04em; color:#14140F;">Acompanhando execução {{ pipelineExecTag }}</span>
+          </div>
+        </sc-if>
+        <sc-if value="{{ !hasPipelineExec }}" hint-placeholder-val="{{ true }}">
+          <div style="font-size:11.5px; color:#5A564C; font-style:italic; margin-bottom:20px;">Nenhuma execução observada ainda nesta sessão do painel. Dispare uma feature e os nós acendem aqui em tempo real, na ordem em que o grafo realmente roda.</div>
+        </sc-if>
+
+        <div style="display:flex; flex-direction:column; gap:0;">
+          <sc-for list="{{ pipelineNodes }}" as="n" hint-placeholder-count="16">
+            <div style="display:flex; gap:14px;">
+              <div style="display:flex; flex-direction:column; align-items:center; width:34px; flex-shrink:0;">
+                <div style="width:30px; height:30px; border:2px solid {{ n.statusColor }}; color:{{ n.statusColor }}; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:800; flex-shrink:0; background:#EDEAE1;">{{ n.num }}</div>
+                <div style="flex:1; width:2px; background:#D9D5C7; min-height:14px;"></div>
+              </div>
+              <div style="flex:1; border:1.5px solid #14140F; padding:14px 16px; margin-bottom:14px;">
+                <div style="display:flex; justify-content:space-between; align-items:baseline; flex-wrap:wrap; gap:8px; margin-bottom:8px;">
+                  <span style="font-size:13px; font-weight:800;">{{ n.title }}</span>
+                  <span style="display:inline-flex; align-items:center; gap:6px; font-size:10px; text-transform:uppercase; letter-spacing:0.04em; padding:3px 8px; border:1px solid {{ n.statusColor }}; color:{{ n.statusColor }}; font-weight:700;">
+                    <span style="width:6px; height:6px; background:{{ n.statusColor }}; display:inline-block;"></span>{{ n.statusLabel }}
+                  </span>
+                </div>
+                <p style="font-size:12px; color:#3A3730; line-height:1.5; margin:0 0 10px;">{{ n.responsibility }}</p>
+                <div style="display:flex; flex-wrap:wrap; gap:20px; padding-top:8px; border-top:1px solid #D9D5C7;">
+                  <div>
+                    <div style="font-size:9px; color:#9B9689; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:2px;">{{ n.kindLabel }}</div>
+                    <div style="font-size:11px; color:#14140F; font-weight:700;">{{ n.agentsLabel }}</div>
+                  </div>
+                  <div>
+                    <div style="font-size:9px; color:#9B9689; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:2px;">Tokens (in / out)</div>
+                    <div style="font-size:11px; color:#14140F; font-weight:700;">{{ n.tokensLabel }}</div>
+                  </div>
+                  <div>
+                    <div style="font-size:9px; color:#9B9689; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:2px;">Custo estimado</div>
+                    <div style="font-size:11px; color:#14140F; font-weight:700;">{{ n.costLabel }}</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+    </sc-if>
+
     <!-- ===================== EXECUÇÕES ===================== -->
     <sc-if value="{{ isExecutions }}" hint-placeholder-val="{{ false }}">
       <div data-screen-label="Execuções" style="max-width:1180px;">
@@ -770,6 +824,50 @@ class Component extends DCLogic {
     "repeated information detected": "Informação repetida detectada",
   };
 
+  // Mirrors the 16 LangGraph nodes in orchestrator/nodes.py, in execution order. `agents`
+  // lists which agent role(s) that node actually dispatches to a real Codex session — those
+  // are the only nodes with real token in/out to show; the rest is pure Python/git logic.
+  static NODE_DEFS = [
+    { id: "analyze_request", num: "01", title: "analyze_request", agents: [],
+      responsibility: "Marca a execução como iniciada e grava o resumo de arquitetura que orienta o resto do pipeline." },
+    { id: "discover_projects", num: "02", title: "discover_projects", agents: [],
+      responsibility: "Lê package.json, .sln/.csproj e manifestos Python pra descobrir stack, gerenciador de pacote e caminho de cada repositório." },
+    { id: "classify_projects", num: "03", title: "classify_projects", agents: [],
+      responsibility: "Pergunta a um classificador leve (Codex sem acesso a arquivo, schema de 3 booleanos) quais domínios essa feature realmente precisa, pra não despachar agente à toa.",
+      note: "Chama Codex, mas o custo desse classificador ainda não é medido — gap conhecido, não aparece na coluna de tokens." },
+    { id: "create_plan", num: "04", title: "create_plan", agents: [],
+      responsibility: "Monta as tasks do plano com base no que foi classificado como relevante, e reaproveita task já concluída em vez de recriar quando a execução é retomada." },
+    { id: "resolve_dependencies", num: "05", title: "resolve_dependencies", agents: [],
+      responsibility: "Ordena as dependências entre tasks — ex.: os gates só rodam depois dos agentes de domínio que eles cobrem." },
+    { id: "create_contracts", num: "06", title: "create_contracts", agents: [],
+      responsibility: "Confere se o arquivo de contrato de integração frontend↔backend documentado ainda existe e cobre as convenções esperadas." },
+    { id: "dispatch_agents", num: "07", title: "dispatch_agents", agents: ["frontend", "backend", "python_ai"],
+      responsibility: "Dispara frontend, backend e python_ai em paralelo — cada um numa sessão Codex isolada, no seu próprio git worktree." },
+    { id: "collect_agent_results", num: "08", title: "collect_agent_results", agents: [],
+      responsibility: "Consolida os arquivos alterados pelos três agentes e marca como pulada qualquer task de domínio que nunca chegou a rodar." },
+    { id: "run_contract_validation", num: "09", title: "run_contract_validation", agents: ["contracts"],
+      responsibility: "Aciona o agente de contracts pra validar payload e API entre os projetos que realmente mudaram nesta execução." },
+    { id: "run_tests", num: "10", title: "run_tests", agents: ["qa"],
+      responsibility: "Aciona o agente de QA pra rodar os testes relevantes e classificar o que falhou." },
+    { id: "security_review", num: "11", title: "security_review", agents: ["security"],
+      responsibility: "Aciona o agente de segurança: varre segredo, permissão de nuvem e risco de deploy nos arquivos alterados." },
+    { id: "code_review", num: "12", title: "code_review", agents: ["reviewer"],
+      responsibility: "Aciona o code reviewer: revê o diff final, testes e compatibilidade — e dá nota de qualidade em 7 eixos." },
+    { id: "commit_changes", num: "13", title: "commit_changes", agents: [],
+      responsibility: "Commita as mudanças no worktree de cada projeto — só chega aqui se nenhum gate acima bloqueou." },
+    { id: "merge_changes", num: "14", title: "merge_changes", agents: [],
+      responsibility: "Abre pull request ou faz merge direto pra main/master, dependendo do AUTO_MERGE." },
+    { id: "deploy", num: "15", title: "deploy", agents: [],
+      responsibility: "Executa a estratégia de deploy detectada (Vercel/CDK/SAM/Serverless/Docker) — só roda de verdade com ALLOW_PRODUCTION_DEPLOY=true." },
+    { id: "generate_final_report", num: "16", title: "generate_final_report", agents: [],
+      responsibility: "Monta o relatório final: status, arquivos alterados, custo total e erros da execução inteira." },
+  ];
+
+  static AGENT_NODE_MAP = {
+    frontend: "dispatch_agents", backend: "dispatch_agents", python_ai: "dispatch_agents",
+    contracts: "run_contract_validation", qa: "run_tests", security: "security_review", reviewer: "code_review",
+  };
+
   // Thresholds mirror the backend defaults (CONTEXT_TOKEN_WARNING / CONTEXT_TOKEN_CRITICAL in
   // orchestrator/config.py) — /dashboard-data does not expose the configured values, so a
   // deployment that overrides those env vars will make this drift from the real thresholds.
@@ -858,6 +956,9 @@ class Component extends DCLogic {
     qualityData: null,
     liveAgents: {},
     agentActivity: {},
+    pipelineExecId: null,
+    nodeStatus: {},
+    nodeTokens: {},
   };
 
   componentDidMount() {
@@ -870,6 +971,7 @@ class Component extends DCLogic {
     this.eventSource = new EventSource("/events");
     this.eventSource.addEventListener("orchestration", (message) => {
       const event = JSON.parse(message.data);
+      this.handlePipelineEvent(event);
       if (event.type === "agent.started" || event.type === "agent.finished") {
         const running = event.status === "running";
         this.setState((s) => ({ liveAgents: Object.assign({}, s.liveAgents, {
@@ -920,6 +1022,50 @@ class Component extends DCLogic {
   componentWillUnmount() {
     if (this.eventSource) this.eventSource.close();
     if (this._dashboardPoll) clearInterval(this._dashboardPoll);
+  }
+
+  // Feeds the "Nós" screen from the same SSE stream everything else already listens to — no
+  // new backend event needed. `state.updated` fires once per node, right after that node
+  // finishes persisting, so it both closes the node that just ran and opens the next one in
+  // NODE_DEFS order. `agent.started`/`agent.finished` map an agent role to its owning node
+  // (AGENT_NODE_MAP) and accumulate that node's real token in/out from the agent's own
+  // AgentResult — the same tokens_input/tokens_output already fixed for Custos/Qualidade.
+  // A change in execution_id resets both maps so an old run's numbers never bleed into a new one.
+  handlePipelineEvent(event) {
+    if (!event.execution_id) return;
+    const nodeOrder = Component.NODE_DEFS.map((n) => n.id);
+    this.setState((s) => {
+      let nodeStatus = s.nodeStatus;
+      let nodeTokens = s.nodeTokens;
+      let execId = s.pipelineExecId;
+      if (execId !== event.execution_id) {
+        execId = event.execution_id;
+        nodeStatus = {};
+        nodeTokens = {};
+      }
+      if (event.type === "state.updated" && event.node) {
+        nodeStatus = Object.assign({}, nodeStatus, { [event.node]: "done" });
+        const idx = nodeOrder.indexOf(event.node);
+        if (idx >= 0 && idx + 1 < nodeOrder.length) {
+          const nextId = nodeOrder[idx + 1];
+          if (nodeStatus[nextId] !== "done") nodeStatus = Object.assign({}, nodeStatus, { [nextId]: "running" });
+        }
+      } else if (event.type === "agent.started") {
+        const nodeId = Component.AGENT_NODE_MAP[event.agent];
+        if (nodeId) nodeStatus = Object.assign({}, nodeStatus, { [nodeId]: "running" });
+      } else if (event.type === "agent.finished" && event.result) {
+        const nodeId = Component.AGENT_NODE_MAP[event.agent];
+        if (nodeId) {
+          const prev = nodeTokens[nodeId] || { input: 0, output: 0, cost: 0 };
+          nodeTokens = Object.assign({}, nodeTokens, { [nodeId]: {
+            input: prev.input + (event.result.tokens_input || 0),
+            output: prev.output + (event.result.tokens_output || 0),
+            cost: prev.cost + (event.result.estimated_cost || 0),
+          } });
+        }
+      }
+      return { pipelineExecId: execId, nodeStatus: nodeStatus, nodeTokens: nodeTokens };
+    });
   }
 
   refreshDashboard() {
@@ -1298,6 +1444,31 @@ class Component extends DCLogic {
     });
   }
 
+  buildPipelineNodes() {
+    const COLOR = Component.COLOR;
+    const statusMap = this.state.nodeStatus || {};
+    const tokensMap = this.state.nodeTokens || {};
+    const labelByStatus = { done: "Concluído", running: "Rodando", pending: "Pendente" };
+    const colorByStatus = { done: COLOR.success, running: COLOR.teal, pending: COLOR.idle };
+    const agentLabels = { frontend: "Frontend", backend: "Backend", python_ai: "Python/IA", contracts: "Contracts", qa: "QA", security: "Security/Cloud", reviewer: "Code Reviewer" };
+    return Component.NODE_DEFS.map((n) => {
+      const status = statusMap[n.id] || "pending";
+      const tokens = tokensMap[n.id] || { input: 0, output: 0, cost: 0 };
+      const hasAgent = n.agents.length > 0;
+      return {
+        key: n.id, num: n.num, title: n.title,
+        responsibility: n.responsibility + (n.note ? " " + n.note : ""),
+        kindLabel: hasAgent ? "Aciona agente" : "Lógica pura, sem chamada de IA",
+        hasAgent: hasAgent,
+        agentsLabel: hasAgent ? n.agents.map((a) => agentLabels[a] || a).join(", ") : "—",
+        statusLabel: labelByStatus[status], statusColor: colorByStatus[status],
+        isRunning: status === "running",
+        tokensLabel: hasAgent ? (tokens.input.toLocaleString("pt-BR") + " in / " + tokens.output.toLocaleString("pt-BR") + " out") : "—",
+        costLabel: hasAgent ? ("US$" + tokens.cost.toFixed(4)) : "—",
+      };
+    });
+  }
+
   navTo(view) {
     return () => this.setState({ view: view, selectedAgentKey: null, selectedExecutionId: null });
   }
@@ -1432,9 +1603,14 @@ class Component extends DCLogic {
       isQuality: this.state.view === "quality",
       isProjects: this.state.view === "projects",
       isAudit: this.state.view === "audit",
+      isPipeline: this.state.view === "pipeline",
+      pipelineNodes: this.buildPipelineNodes(),
+      pipelineExecTag: this.state.pipelineExecId ? this.state.pipelineExecId.slice(0, 8) : null,
+      hasPipelineExec: !!this.state.pipelineExecId,
       navItems: [
         { key: "dashboard", label: "DASHBOARD" },
         { key: "agents", label: "AGENTES" },
+        { key: "pipeline", label: "NÓS" },
         { key: "executions", label: "EXECUÇÕES" },
         { key: "mcps", label: "MCPS" },
         { key: "costs", label: "CUSTOS" },
