@@ -179,3 +179,50 @@ async def test_ensure_awake_spawns_the_backend_with_the_configured_cwd(tmp_path:
         assert Path(recorded_cwd).resolve() == desired_cwd.resolve()
     finally:
         manager.stop_if_idle()
+
+
+SPAWN_COUNTING_BACKEND_SCRIPT = r'''
+import pathlib
+import sys
+import uuid
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(b'{"ok": true}')
+
+    def log_message(self, *args):
+        pass
+
+
+port = int(sys.argv[1])
+spawns_dir = pathlib.Path(sys.argv[2])
+(spawns_dir / str(uuid.uuid4())).write_text("spawned")
+HTTPServer(("127.0.0.1", port), Handler).serve_forever()
+'''
+
+
+@pytest.mark.asyncio
+async def test_ensure_awake_spawns_only_once_under_concurrent_callers(tmp_path: Path):
+    """The dashboard's own mount fires several concurrent first-requests
+    (refreshDashboard, refreshQuality, the /events connect) — two overlapping
+    ensure_awake() calls on the same manager must not both spawn a backend."""
+    script = tmp_path / "spawn_counting_backend.py"
+    script.write_text(SPAWN_COUNTING_BACKEND_SCRIPT, encoding="utf-8")
+    spawns_dir = tmp_path / "spawns"
+    spawns_dir.mkdir()
+    port = free_port()
+    command = [sys.executable, str(script), str(port), str(spawns_dir)]
+    manager = ProcessManager(start_command=command, health_url=f"http://127.0.0.1:{port}/", health_timeout_seconds=10)
+
+    try:
+        await asyncio.gather(manager.ensure_awake(), manager.ensure_awake(), manager.ensure_awake())
+
+        assert len(list(spawns_dir.iterdir())) == 1, "concurrent callers must result in exactly one spawn"
+        assert manager.is_running()
+    finally:
+        manager.stop_if_idle()

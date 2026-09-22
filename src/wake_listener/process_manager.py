@@ -24,21 +24,27 @@ class ProcessManager:
         self.health_poll_interval_seconds = health_poll_interval_seconds
         self.cwd = cwd
         self._process: subprocess.Popen | None = None
+        self._spawn_lock = asyncio.Lock()
 
     def is_running(self) -> bool:
         return self._process is not None and self._process.poll() is None
 
     async def ensure_awake(self) -> None:
-        if self.is_running():
-            return
-        if await self._is_healthy():
-            return
-        self._process = subprocess.Popen(self.start_command, cwd=self.cwd)
-        try:
-            await self._wait_healthy()
-        except TimeoutError:
-            self.stop_if_idle()
-            raise
+        # The dashboard's own mount fires several concurrent first-requests
+        # (refreshDashboard, refreshQuality, the /events connect) — without this lock,
+        # two callers could both pass the not-running/not-healthy checks before either
+        # had spawned anything, and both call subprocess.Popen for the same port.
+        async with self._spawn_lock:
+            if self.is_running():
+                return
+            if await self._is_healthy():
+                return
+            self._process = subprocess.Popen(self.start_command, cwd=self.cwd)
+            try:
+                await self._wait_healthy()
+            except TimeoutError:
+                self.stop_if_idle()
+                raise
 
     async def _is_healthy(self) -> bool:
         try:

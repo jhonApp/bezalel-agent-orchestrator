@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import secrets
 from contextlib import asynccontextmanager, suppress
 from typing import Any, AsyncIterator
 
@@ -20,6 +21,10 @@ logger = logging.getLogger(__name__)
 _EXCLUDED_REQUEST_HEADERS = {"host", "content-length", "authorization"}
 _EXCLUDED_RESPONSE_HEADERS = {"content-encoding", "transfer-encoding", "content-length", "connection"}
 _STREAMED_PATH_PREFIXES = ("events",)
+# EventSource cannot set custom headers, so /events specifically accepts the token as a
+# query param too — exact-path match, not a prefix, so this stays the one narrow exception
+# rather than silently covering every "events*" route (e.g. the unrelated /events/view page).
+_QUERY_TOKEN_EXACT_PATH = "events"
 
 
 def create_app(settings: WakeListenerSettings, process_manager: ProcessManager | None = None,
@@ -73,9 +78,12 @@ def create_app(settings: WakeListenerSettings, process_manager: ProcessManager |
         target_url = f"{settings.backend_base_url}/{path}"
         body = await request.body()
         headers = {k: v for k, v in request.headers.items() if k.lower() not in _EXCLUDED_REQUEST_HEADERS}
+        # "token" is this listener's own auth, never meant for the upstream backend — forwarding
+        # it would land the shared secret in the backend's own uvicorn access log.
+        forwarded_params = [(k, v) for k, v in request.query_params.multi_items() if k != "token"]
         client = httpx.AsyncClient(timeout=None)
         upstream_request = client.build_request(
-            request.method, target_url, params=request.query_params, headers=headers, content=body,
+            request.method, target_url, params=forwarded_params, headers=headers, content=body,
         )
 
         is_streamed = path.startswith(_STREAMED_PATH_PREFIXES)
@@ -151,10 +159,12 @@ async def _idle_tick(tracker: ActivityTracker, process_manager: ProcessManager, 
 def _check_token(settings: WakeListenerSettings, request: Request, path: str) -> None:
     if not settings.auth_token:
         return
-    if request.headers.get("authorization") == f"Bearer {settings.auth_token}":
+    header = request.headers.get("authorization", "")
+    if secrets.compare_digest(header, f"Bearer {settings.auth_token}"):
         return
     # EventSource (used for the /events SSE path) cannot set custom headers — this
-    # is the one intentional exception to header-only auth, scoped to that path only.
-    if path.startswith(_STREAMED_PATH_PREFIXES) and request.query_params.get("token") == settings.auth_token:
+    # is the one intentional exception to header-only auth, scoped to that exact path.
+    query_token = request.query_params.get("token", "")
+    if path == _QUERY_TOKEN_EXACT_PATH and query_token and secrets.compare_digest(query_token, settings.auth_token):
         return
     raise HTTPException(status_code=401, detail="invalid or missing token")

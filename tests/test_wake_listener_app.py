@@ -176,6 +176,20 @@ async def test_query_param_token_is_rejected_on_a_non_streaming_path(tmp_path: P
 
 
 @pytest.mark.asyncio
+async def test_query_param_token_is_rejected_on_events_view_too(tmp_path: Path):
+    """The ?token= exception is scoped to the exact "/events" path, not any path that
+    merely starts with "events" — /events/view is a real, separate HTML page route on
+    the orchestrator API and must not inherit the SSE-only auth exception."""
+    app, process_manager = build_wired_app(tmp_path)
+    try:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.get("/events/view?token=secret123")
+        assert response.status_code == 401
+    finally:
+        process_manager.stop_if_idle()
+
+
+@pytest.mark.asyncio
 async def test_proxy_returns_502_when_the_upstream_request_fails(tmp_path: Path):
     script = tmp_path / "fake_backend.py"
     script.write_text(FAKE_BACKEND_SCRIPT, encoding="utf-8")

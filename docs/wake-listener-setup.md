@@ -7,10 +7,10 @@ for the design rationale.
 
 ## 1. Environment variables
 
-Set these before starting the listener (e.g. in `.env` at the repo root,
-picked up by the existing `python-dotenv` loading used by `Settings.load()`
-in `orchestrator/config.py` — the wake listener does not use `.env` loading
-itself, so export these in the shell/service environment instead):
+Set these before starting the listener. Unlike the orchestrator API itself
+(`Settings.load()` in `orchestrator/config.py`, which reads a `.env` file via
+`python-dotenv`), the wake listener does not load `.env` — export these
+directly in the shell or service environment instead:
 
 | Variable | Default | Purpose |
 |---|---|---|
