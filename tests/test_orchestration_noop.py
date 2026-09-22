@@ -389,6 +389,157 @@ async def test_run_task_publishes_agent_stream_events(tmp_path: Path):
     assert first["parsed"] == {"kind": "tool_call", "tool": "apply_patch"}
 
 
+RATE_LIMIT_SCRIPT_TEMPLATE = r'''
+import json
+import pathlib
+import sys
+calls_dir = pathlib.Path(r"{calls_dir}")
+(calls_dir / str(len(list(calls_dir.iterdir())))).write_text("call")
+print(json.dumps({{"type": "turn.failed", "error": {{"message": "You’ve hit your usage limit. Upgrade to Pro or try again later."}}}}), flush=True)
+sys.exit(1)
+'''
+
+GENUINE_FAILURE_SCRIPT_TEMPLATE = r'''
+import json
+import pathlib
+import sys
+calls_dir = pathlib.Path(r"{calls_dir}")
+(calls_dir / str(len(list(calls_dir.iterdir())))).write_text("call")
+output = pathlib.Path(sys.argv[sys.argv.index("--output-last-message") + 1])
+output.write_text(json.dumps({{
+    "status": "failed", "summary": "boom",
+    "files_changed": [], "tests": [], "contracts_changed": [],
+    "errors": ["boom"], "next_action": None, "tokens_input": 1, "tokens_output": 1,
+}}), encoding="utf-8")
+sys.exit(1)
+'''
+
+
+@pytest.mark.asyncio
+async def test_run_task_does_not_retry_a_rate_limited_result(tmp_path: Path):
+    """A real usage-limit hit does not reset within this loop's 2s/4s backoff — retrying it
+    only guarantees hitting the same wall again, burning another full prompt's worth of input
+    tokens right when the account is already out of quota."""
+    calls_dir = tmp_path / "calls"
+    calls_dir.mkdir()
+    script = tmp_path / "fake_codex_rate_limit.py"
+    script.write_text(RATE_LIMIT_SCRIPT_TEMPLATE.format(calls_dir=str(calls_dir)), encoding="utf-8")
+    settings = Settings(
+        orchestrator_root=tmp_path, workspace_root=tmp_path, frontend_path=tmp_path,
+        backend_path=tmp_path, python_path=tmp_path,
+        codex_command=f'"{sys.executable}" "{script}"',
+        checkpoint_sqlite_path=tmp_path / "checkpoints.sqlite3",
+        langgraph_checkpoint_sqlite_path=tmp_path / "langgraph.sqlite3",
+        max_retries=2, retry_backoff_seconds=0.01,
+    )
+    runtime = ExecutionRuntime(settings)
+    state = {"execution_id": "execution-1", "feature_request": "add a button", "worktrees": {}, "detected_projects": []}
+    task = {"task_id": "T001", "agent": "frontend", "project_id": "frontend", "description": "do it", "acceptance_criteria": []}
+
+    result = await runtime.run_task(state, task)
+
+    assert result.status == "rate_limited"
+    assert len(list(calls_dir.iterdir())) == 1, "rate_limited must not be retried"
+
+
+@pytest.mark.asyncio
+async def test_run_task_still_retries_a_genuine_failure(tmp_path: Path):
+    """The rate_limited carve-out must not turn into "never retry anything" — a plain
+    failure (a bad edit, a flaky tool call) keeps the existing retry budget."""
+    calls_dir = tmp_path / "calls"
+    calls_dir.mkdir()
+    script = tmp_path / "fake_codex_genuine_failure.py"
+    script.write_text(GENUINE_FAILURE_SCRIPT_TEMPLATE.format(calls_dir=str(calls_dir)), encoding="utf-8")
+    settings = Settings(
+        orchestrator_root=tmp_path, workspace_root=tmp_path, frontend_path=tmp_path,
+        backend_path=tmp_path, python_path=tmp_path,
+        codex_command=f'"{sys.executable}" "{script}"',
+        checkpoint_sqlite_path=tmp_path / "checkpoints.sqlite3",
+        langgraph_checkpoint_sqlite_path=tmp_path / "langgraph.sqlite3",
+        max_retries=2, retry_backoff_seconds=0.01,
+    )
+    runtime = ExecutionRuntime(settings)
+    state = {"execution_id": "execution-1", "feature_request": "add a button", "worktrees": {}, "detected_projects": []}
+    task = {"task_id": "T001", "agent": "frontend", "project_id": "frontend", "description": "do it", "acceptance_criteria": []}
+
+    result = await runtime.run_task(state, task)
+
+    assert result.status == "failed"
+    assert len(list(calls_dir.iterdir())) == 3, "a genuine failure keeps retrying up to max_retries"
+
+
+@pytest.mark.asyncio
+async def test_run_task_injects_known_project_context_into_the_prompt(tmp_path: Path):
+    """discover_projects already learns framework/package manager/exact commands/important
+    files once per execution — the agent must receive that directly instead of re-deriving
+    it via several rounds of file reads on every single task."""
+    captured_prompts: list[str] = []
+
+    class CapturingCodex:
+        async def execute(self, prompt, workdir, role, **kwargs):
+            captured_prompts.append(prompt)
+            return AgentResult(agent=role, status="completed", summary="ok")
+
+    settings = Settings(
+        orchestrator_root=tmp_path, workspace_root=tmp_path, frontend_path=tmp_path,
+        backend_path=tmp_path, python_path=tmp_path,
+        checkpoint_sqlite_path=tmp_path / "checkpoints.sqlite3",
+        langgraph_checkpoint_sqlite_path=tmp_path / "langgraph.sqlite3",
+    )
+    runtime = ExecutionRuntime(settings, codex=CapturingCodex())
+    state = {
+        "execution_id": "execution-1", "feature_request": "add a button", "worktrees": {},
+        "detected_projects": [{
+            "project_id": "frontend", "expected_name": "bezalel-app", "path": str(tmp_path), "exists": True,
+            "framework": ["React", "Vite"], "package_manager": "npm",
+            "commands": {"test": "npm run test", "lint": "npm run lint"},
+            "test_strategy": "Vitest", "important_files": ["package.json", "vite.config.ts"],
+        }],
+    }
+    task = {"task_id": "T001", "agent": "frontend", "project_id": "frontend", "description": "do it", "acceptance_criteria": []}
+
+    await runtime.run_task(state, task)
+
+    assert captured_prompts, "expected the agent to be invoked"
+    prompt = captured_prompts[0]
+    assert "React, Vite" in prompt
+    assert "npm" in prompt
+    assert "npm run test" in prompt
+    assert "Vitest" in prompt
+    assert "package.json" in prompt
+
+
+@pytest.mark.asyncio
+async def test_run_task_lowers_reasoning_effort_only_for_gate_roles(tmp_path: Path):
+    """contracts/reviewer judge an already-produced diff — frontend/backend/python_ai still
+    write the code, so they keep the CLI's own default reasoning effort (no override)."""
+    from agents.registry import GATE_ROLES
+
+    captured: list[dict] = []
+
+    class CapturingCodex:
+        async def execute(self, prompt, workdir, role, **kwargs):
+            captured.append(kwargs)
+            return AgentResult(agent=role, status="completed", summary="ok")
+
+    settings = Settings(
+        orchestrator_root=tmp_path, workspace_root=tmp_path, frontend_path=tmp_path,
+        backend_path=tmp_path, python_path=tmp_path,
+        checkpoint_sqlite_path=tmp_path / "checkpoints.sqlite3",
+        langgraph_checkpoint_sqlite_path=tmp_path / "langgraph.sqlite3",
+    )
+    runtime = ExecutionRuntime(settings, codex=CapturingCodex())
+    state = {"execution_id": "execution-1", "feature_request": "add a button", "worktrees": {}, "detected_projects": []}
+
+    for role in ("frontend", "contracts"):
+        task = {"task_id": "T-" + role, "agent": role, "project_id": "backend", "description": "do it", "acceptance_criteria": []}
+        await runtime.run_task(state, task)
+
+    assert "contracts" in GATE_ROLES and "frontend" not in GATE_ROLES
+    assert captured[0]["reasoning_effort"] is None  # frontend
+    assert captured[1]["reasoning_effort"] == settings.codex_reasoning_effort_gates  # contracts
+
+
 @pytest.mark.asyncio
 async def test_security_review_tags_each_finding_with_its_project_id(monkeypatch):
     async def fake_changed_paths(runtime, state, project_id):

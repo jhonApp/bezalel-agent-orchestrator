@@ -8,7 +8,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
-from agents.registry import AGENT_ROLES, role_prompt
+from agents.registry import AGENT_ROLES, GATE_ROLES, role_prompt
 from agents.security import scan_project
 from adapters.codex_cli import CLASSIFIER_SCHEMA, CodexCLI
 from adapters.command import run_command
@@ -100,6 +100,9 @@ class ExecutionRuntime:
         workdir = self.workdir_for(state, task["project_id"])
         prompt = role_prompt(role, self.settings.orchestrator_root / "prompts")
         prompt += f"\n\nFeature request:\n{state['feature_request']}\n\nTask {task['task_id']}: {task['description']}\nAcceptance criteria:\n" + "\n".join(f"- {x}" for x in task.get("acceptance_criteria", []))
+        project_context = self._known_project_context(state, task["project_id"])
+        if project_context:
+            prompt += "\n\n" + project_context
         if state.get("approvals", {}).get("analysis_only"):
             prompt += ("\n\nANALYSIS-ONLY MODE: Do not create, modify, or delete any file. Read the code and "
                        "return your findings, risks and recommendations in `summary`. `files_changed` must stay empty.")
@@ -109,6 +112,7 @@ class ExecutionRuntime:
                 "agent": role, "task_id": task["task_id"], **event,
             })
 
+        reasoning_effort = self.settings.codex_reasoning_effort_gates if role in GATE_ROLES else None
         attempts = 0
         last: AgentResult | None = None
         while attempts <= self.settings.max_retries:
@@ -122,14 +126,43 @@ class ExecutionRuntime:
                                                   "orchestrator_project_id": task["project_id"],
                                                   "context_health": state.get("context_health", {}),
                                               },
-                                              on_event=on_event)
+                                              on_event=on_event, reasoning_effort=reasoning_effort)
             last = result
-            if result.status == "completed":
+            # A real usage-limit hit is not transient the way a timeout or a flaky tool call
+            # is: the account-wide quota it reports against does not reset within this loop's
+            # 2s/4s backoff, so retrying here only guarantees hitting the same wall two more
+            # times, each burning a full prompt's worth of input tokens at the worst possible
+            # moment. Stop after one attempt and let the gate/report surface it instead.
+            if result.status in ("completed", "rate_limited"):
                 break
             state["retries"] = int(state.get("retries", 0)) + 1
             if attempts <= self.settings.max_retries:
                 await asyncio.sleep(self.settings.retry_backoff_seconds * (2 ** (attempts - 1)))
         return last or AgentResult(agent=role, status="failed", summary="agent did not return")
+
+    @staticmethod
+    def _known_project_context(state: dict[str, Any], project_id: str) -> str:
+        """Render what `discover_projects` already learned about this project (framework,
+        package manager, exact lint/test/build commands, important files) so the agent
+        doesn't have to re-derive it via several rounds of file reads/greps on every single
+        task — the dominant source of the large input-token-to-output-token ratio observed
+        in production (e.g. python_ai: ~325k input vs ~3k output tokens over 17 executions).
+        """
+        project = next((p for p in state.get("detected_projects", []) if p.get("project_id") == project_id), None)
+        if not project:
+            return ""
+        lines = ["Known project context (already detected — do not re-discover this by exploring the repo):"]
+        if project.get("framework"):
+            lines.append("- Framework: " + ", ".join(project["framework"]))
+        if project.get("package_manager"):
+            lines.append("- Package manager: " + project["package_manager"])
+        if project.get("commands"):
+            lines.append("- Commands: " + "; ".join(f"{k}={v}" for k, v in project["commands"].items()))
+        if project.get("test_strategy"):
+            lines.append("- Test strategy: " + project["test_strategy"])
+        if project.get("important_files"):
+            lines.append("- Important files: " + ", ".join(project["important_files"]))
+        return "\n".join(lines) if len(lines) > 1 else ""
 
     async def announce_agent_started(self, state: dict[str, Any], task: dict[str, Any]) -> None:
         """Publish the same agent.started lifecycle event dispatch_agents emits for the
@@ -166,7 +199,8 @@ class ExecutionRuntime:
         """
         prompt = role_prompt("classifier", self.settings.orchestrator_root / "prompts")
         prompt += f"\n\nFeature request:\n{feature_request}"
-        result = await self.codex.execute_json(prompt, self.settings.workspace_root, CLASSIFIER_SCHEMA, "Classifier")
+        result = await self.codex.execute_json(prompt, self.settings.workspace_root, CLASSIFIER_SCHEMA, "Classifier",
+                                               reasoning_effort=self.settings.codex_reasoning_effort_gates)
         if result is None:
             return sorted(existing), "fail_open"
         domains = {"frontend": "frontend", "backend": "backend", "python": "python"}

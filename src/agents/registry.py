@@ -14,6 +14,14 @@ AGENT_ROLES = {
     "classifier": {"label": "Domain Classifier", "project_id": None, "prompt": "classifier.md", "prompt_version": "1.0"},
 }
 
+# Roles that judge an already-produced diff rather than writing code — lower reasoning effort
+# is worth trying for these first since the existing quality-evaluation pipeline can measure
+# whether it actually costs any quality. "qa" and "security" are deliberately excluded: despite
+# having prompt files and a registry entry, run_tests/security_review (orchestrator/nodes.py)
+# never dispatch them to Codex — they run deterministic checks (the project's own test command,
+# a regex secret/permission scan) instead, so qa.md/security.md are currently unused prompts.
+GATE_ROLES = {"contracts", "reviewer"}
+
 
 def role_prompt(role: str, prompts_root: Path) -> str:
     path = prompts_root / AGENT_ROLES.get(role, {}).get("prompt", "supervisor.md")

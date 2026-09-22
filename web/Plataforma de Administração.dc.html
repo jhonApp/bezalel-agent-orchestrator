@@ -847,10 +847,12 @@ class Component extends DCLogic {
       responsibility: "Consolida os arquivos alterados pelos três agentes e marca como pulada qualquer task de domínio que nunca chegou a rodar." },
     { id: "run_contract_validation", num: "09", title: "run_contract_validation", agents: ["contracts"],
       responsibility: "Aciona o agente de contracts pra validar payload e API entre os projetos que realmente mudaram nesta execução." },
-    { id: "run_tests", num: "10", title: "run_tests", agents: ["qa"],
-      responsibility: "Aciona o agente de QA pra rodar os testes relevantes e classificar o que falhou." },
-    { id: "security_review", num: "11", title: "security_review", agents: ["security"],
-      responsibility: "Aciona o agente de segurança: varre segredo, permissão de nuvem e risco de deploy nos arquivos alterados." },
+    { id: "run_tests", num: "10", title: "run_tests", agents: [],
+      responsibility: "Roda o comando de teste real do projeto (npm test / dotnet test / pytest) direto — hoje isso NÃO passa por um agente Codex, é lógica determinística.",
+      note: "\"qa\" existe no registro de agentes e tem prompt próprio (qa.md), mas nunca é dispatchado — esse gap só apareceu analisando o código pra essa tela." },
+    { id: "security_review", num: "11", title: "security_review", agents: [],
+      responsibility: "Varre os arquivos alterados com regex (chave privada, AKIA, senha/token) direto — também lógica determinística, sem chamada de IA.",
+      note: "Mesmo caso do run_tests: \"security\" tem prompt próprio (security.md) que hoje não é usado." },
     { id: "code_review", num: "12", title: "code_review", agents: ["reviewer"],
       responsibility: "Aciona o code reviewer: revê o diff final, testes e compatibilidade — e dá nota de qualidade em 7 eixos." },
     { id: "commit_changes", num: "13", title: "commit_changes", agents: [],
@@ -863,9 +865,12 @@ class Component extends DCLogic {
       responsibility: "Monta o relatório final: status, arquivos alterados, custo total e erros da execução inteira." },
   ];
 
+  // "qa" and "security" are deliberately absent: run_tests/security_review never dispatch a
+  // Codex agent (see NODE_DEFS notes on those two nodes) — a map entry for them would imply
+  // live token tracking that can never actually happen.
   static AGENT_NODE_MAP = {
     frontend: "dispatch_agents", backend: "dispatch_agents", python_ai: "dispatch_agents",
-    contracts: "run_contract_validation", qa: "run_tests", security: "security_review", reviewer: "code_review",
+    contracts: "run_contract_validation", reviewer: "code_review",
   };
 
   // Thresholds mirror the backend defaults (CONTEXT_TOKEN_WARNING / CONTEXT_TOKEN_CRITICAL in

@@ -50,8 +50,8 @@ class FakeCodexForClassifier:
         self._result = result
         self.calls = []
 
-    async def execute_json(self, prompt, workdir, schema, label, timeout=120):
-        self.calls.append({"prompt": prompt, "workdir": workdir, "schema": schema, "label": label})
+    async def execute_json(self, prompt, workdir, schema, label, timeout=120, reasoning_effort=None):
+        self.calls.append({"prompt": prompt, "workdir": workdir, "schema": schema, "label": label, "reasoning_effort": reasoning_effort})
         return self._result
 
 
@@ -65,6 +65,7 @@ async def test_classify_relevant_projects_filters_by_the_classifier_result(tmp_p
 
     assert relevant == ["frontend"]
     assert source == "classifier"
+    assert runtime.codex.calls[0]["reasoning_effort"] == settings.codex_reasoning_effort_gates
 
 
 @pytest.mark.asyncio

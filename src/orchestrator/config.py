@@ -66,6 +66,11 @@ class Settings(BaseModel):
     cleanup_worktrees: bool = False
     codex_approval_policy: str = "never"
     codex_sandbox: str = "workspace-write"
+    # contracts/qa/security/reviewer (and the domain classifier) are judgment calls over an
+    # already-produced diff, not code generation — lower reasoning effort cuts token/latency
+    # cost for them specifically. frontend/backend/python_ai keep the CLI's own default (None
+    # here means "do not pass -c model_reasoning_effort", i.e. no override).
+    codex_reasoning_effort_gates: str | None = "low"
     context_token_warning: int = 24000
     context_token_critical: int = 60000
     cost_per_1m_input: float = 1.75
@@ -148,6 +153,7 @@ class Settings(BaseModel):
             # --dangerously-bypass-approvals-and-sandbox interactive sessions already use;
             # git worktree isolation is the real containment, not the OS sandbox, on this platform.
             codex_sandbox=os.getenv("CODEX_SANDBOX", "danger-full-access" if os.name == "nt" else "workspace-write"),
+            codex_reasoning_effort_gates=os.getenv("CODEX_REASONING_EFFORT_GATES", "low").strip() or None,
             context_token_warning=_int("CONTEXT_TOKEN_WARNING", 24000),
             context_token_critical=_int("CONTEXT_TOKEN_CRITICAL", 60000),
             cost_per_1m_input=_float("CONTEXT_COST_PER_1M_INPUT", 1.75),

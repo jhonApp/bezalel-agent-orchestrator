@@ -122,7 +122,8 @@ class CodexCLI:
     async def execute(self, prompt: str, workdir: Path, role: str, timeout: int | None = None,
                       cancel_event: asyncio.Event | None = None,
                       trace_metadata: dict[str, Any] | None = None,
-                      on_event: Callable[[dict[str, Any]], Awaitable[None]] | None = None) -> AgentResult:
+                      on_event: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
+                      reasoning_effort: str | None = None) -> AgentResult:
         timeout = timeout or self.settings.agent_timeout_seconds
         started = time.perf_counter()
         workdir = workdir.resolve()
@@ -132,7 +133,7 @@ class CodexCLI:
             output_path = temp_path / "last-message.txt"
             schema_path.write_text(json.dumps(AGENT_SCHEMA), encoding="utf-8")
             full_prompt = f"""You are the {role} agent in the Bezalel orchestrator.\n\n{prompt}\n\nReturn only a JSON object matching the supplied schema in your final response. Never include secrets or private model reasoning.\n"""
-            command = self._exec_command(workdir, schema_path, output_path)
+            command = self._exec_command(workdir, schema_path, output_path, reasoning_effort)
             try:
                 metadata = {"agent": role, "workdir": str(workdir), **(trace_metadata or {})}
                 with self.tracing.codex_session("orchestrator.codex_task", {"role": role, "prompt": prompt}, metadata) as environment:
@@ -198,7 +199,7 @@ class CodexCLI:
             return parsed
 
     async def execute_json(self, prompt: str, workdir: Path, schema: dict[str, Any], label: str,
-                           timeout: int = 120) -> dict[str, Any] | None:
+                           timeout: int = 120, reasoning_effort: str | None = None) -> dict[str, Any] | None:
         """Run one short, read-only Codex turn constrained to `schema` and return the raw
         parsed JSON — for callers that don't need (or don't fit) the AgentResult contract,
         like the domain-relevance classifier. Returns None on any failure; the caller
@@ -211,7 +212,7 @@ class CodexCLI:
             output_path = temp_path / "last-message.txt"
             schema_path.write_text(json.dumps(schema), encoding="utf-8")
             full_prompt = f"You are the {label} in the Bezalel orchestrator.\n\n{prompt}\n\nReturn only a JSON object matching the supplied schema in your final response.\n"
-            command = self._exec_command(workdir, schema_path, output_path)
+            command = self._exec_command(workdir, schema_path, output_path, reasoning_effort)
             try:
                 process = await asyncio.create_subprocess_exec(*command, cwd=str(workdir),
                                                                 stdin=asyncio.subprocess.PIPE,
@@ -278,7 +279,8 @@ class CodexCLI:
             except Exception:
                 pass
 
-    def _exec_command(self, workdir: Path, schema_path: Path, output_path: Path) -> list[str]:
+    def _exec_command(self, workdir: Path, schema_path: Path, output_path: Path,
+                      reasoning_effort: str | None = None) -> list[str]:
         """Build an invocation compatible with the installed non-interactive CLI.
 
         Recent Codex CLI versions removed ``--ask-for-approval`` from ``exec``.
@@ -286,14 +288,16 @@ class CodexCLI:
         override, so keep it as one argv item and let Codex parse the TOML value.
         """
         approval = json.dumps(self.settings.codex_approval_policy)
-        return self.command + [
+        command = self.command + [
             "exec", "--json", "--ephemeral", "--cd", str(workdir),
             "--output-schema", str(schema_path), "--output-last-message", str(output_path),
             "--skip-git-repo-check", "--ignore-user-config", "-c", f"approval_policy={approval}",
             "-c", "features.plugin_hooks=true",
             "-c", 'plugins."tracing@langsmith-codex-plugins".enabled=true',
-            "-s", self.settings.codex_sandbox, "-",
         ]
+        if reasoning_effort:
+            command += ["-c", f"model_reasoning_effort={json.dumps(reasoning_effort)}"]
+        return command + ["-s", self.settings.codex_sandbox, "-"]
 
     _USAGE_LIMIT_MARKERS = ("usage limit", "limite de uso", "upgrade to pro", "purchase more credits")
 

@@ -33,6 +33,25 @@ def test_exec_command_uses_config_override_for_approval_policy(tmp_path: Path):
     assert command[-1] == "-"
 
 
+def test_exec_command_omits_reasoning_effort_override_by_default(tmp_path: Path):
+    settings = Settings(orchestrator_root=tmp_path, workspace_root=tmp_path, frontend_path=tmp_path,
+                        backend_path=tmp_path, python_path=tmp_path, codex_command="codex")
+    command = CodexCLI(settings)._exec_command(tmp_path, tmp_path / "schema.json", tmp_path / "output.txt")
+
+    assert not any("model_reasoning_effort" in part for part in command)
+
+
+def test_exec_command_passes_reasoning_effort_override_when_given(tmp_path: Path):
+    settings = Settings(orchestrator_root=tmp_path, workspace_root=tmp_path, frontend_path=tmp_path,
+                        backend_path=tmp_path, python_path=tmp_path, codex_command="codex")
+    command = CodexCLI(settings)._exec_command(tmp_path, tmp_path / "schema.json", tmp_path / "output.txt",
+                                               reasoning_effort="low")
+
+    assert 'model_reasoning_effort="low"' in command
+    assert command[-1] == "-"
+    assert command[-2] == settings.codex_sandbox
+
+
 def test_agent_schema_requires_a_nullable_quality_object():
     quality = AGENT_SCHEMA["properties"]["quality"]
     assert AGENT_SCHEMA["additionalProperties"] is False
