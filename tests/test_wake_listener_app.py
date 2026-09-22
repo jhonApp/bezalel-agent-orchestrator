@@ -9,7 +9,7 @@ import httpx
 import pytest
 
 from wake_listener.activity import ActivityTracker
-from wake_listener.app import create_app, run_idle_check_once
+from wake_listener.app import _idle_tick, create_app, run_idle_check_once
 from wake_listener.config import WakeListenerSettings
 from wake_listener.process_manager import ProcessManager
 
@@ -160,3 +160,60 @@ async def test_run_idle_check_once_leaves_a_recently_active_backend_running(tmp_
         assert process_manager.is_running()
     finally:
         process_manager.stop_if_idle()
+
+
+@pytest.mark.asyncio
+async def test_query_param_token_is_rejected_on_a_non_streaming_path(tmp_path: Path):
+    """The ?token= fallback exists only because EventSource can't set headers
+    for /events — it must not become a general auth bypass on other paths."""
+    app, process_manager = build_wired_app(tmp_path)
+    try:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.get("/dashboard-data?token=secret123")
+        assert response.status_code == 401
+    finally:
+        process_manager.stop_if_idle()
+
+
+@pytest.mark.asyncio
+async def test_proxy_returns_502_when_the_upstream_request_fails(tmp_path: Path):
+    script = tmp_path / "fake_backend.py"
+    script.write_text(FAKE_BACKEND_SCRIPT, encoding="utf-8")
+    healthy_port = free_port()
+    dead_port = free_port()
+    # settings point the actual proxied request at a port nothing is listening on...
+    settings = WakeListenerSettings(backend_port=dead_port, backend_health_path="/", auth_token="secret123")
+    # ...but the injected process manager's health check targets the real fake
+    # backend, so ensure_awake() reports healthy and the request proceeds to the
+    # (dead) proxy target, where it must fail with a real connection error.
+    process_manager = ProcessManager(
+        start_command=[sys.executable, str(script), str(healthy_port)],
+        health_url=f"http://127.0.0.1:{healthy_port}/", health_timeout_seconds=15,
+    )
+    app = create_app(settings, process_manager=process_manager)
+    try:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.get("/dashboard-data", headers={"Authorization": "Bearer secret123"})
+        assert response.status_code == 502
+    finally:
+        process_manager.stop_if_idle()
+
+
+class _RaisingProcessManager:
+    """Minimal stub whose stop_if_idle always raises, to prove the idle loop
+    survives a single failing tick instead of dying silently forever."""
+
+    def is_running(self) -> bool:
+        return True
+
+    def stop_if_idle(self) -> bool:
+        raise RuntimeError("boom")
+
+
+@pytest.mark.asyncio
+async def test_idle_tick_swallows_exceptions_from_a_failing_stop_if_idle():
+    now = [0.0]
+    tracker = ActivityTracker(clock=lambda: now[0])
+    now[0] = 10_000.0
+
+    await _idle_tick(tracker, _RaisingProcessManager(), idle_timeout_seconds=60)

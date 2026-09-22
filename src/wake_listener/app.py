@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator
 
@@ -13,6 +14,8 @@ from starlette.responses import StreamingResponse
 from wake_listener.activity import ActivityTracker
 from wake_listener.config import WakeListenerSettings
 from wake_listener.process_manager import ProcessManager
+
+logger = logging.getLogger(__name__)
 
 _EXCLUDED_REQUEST_HEADERS = {"host", "content-length", "authorization"}
 _EXCLUDED_RESPONSE_HEADERS = {"content-encoding", "transfer-encoding", "content-length", "connection"}
@@ -34,7 +37,7 @@ def create_app(settings: WakeListenerSettings, process_manager: ProcessManager |
         async def idle_loop() -> None:
             while True:
                 await asyncio.sleep(settings.idle_check_interval_seconds)
-                await run_idle_check_once(tracker, process_manager, settings.idle_timeout_seconds)
+                await _idle_tick(tracker, process_manager, settings.idle_timeout_seconds)
 
         task = asyncio.create_task(idle_loop())
         try:
@@ -57,7 +60,7 @@ def create_app(settings: WakeListenerSettings, process_manager: ProcessManager |
 
     @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
     async def proxy(path: str, request: Request) -> Response:
-        _check_token(settings, request)
+        _check_token(settings, request, path)
         tracker.mark_active()
         try:
             await process_manager.ensure_awake()
@@ -72,8 +75,14 @@ def create_app(settings: WakeListenerSettings, process_manager: ProcessManager |
             request.method, target_url, params=request.query_params, headers=headers, content=body,
         )
 
-        if path.startswith(_STREAMED_PATH_PREFIXES):
-            upstream_response = await client.send(upstream_request, stream=True)
+        is_streamed = path.startswith(_STREAMED_PATH_PREFIXES)
+        try:
+            upstream_response = await client.send(upstream_request, stream=is_streamed)
+        except httpx.HTTPError as exc:
+            await client.aclose()
+            raise HTTPException(status_code=502, detail=f"upstream request failed: {exc}")
+
+        if is_streamed:
             tracker.stream_opened()
 
             async def body_iterator() -> AsyncIterator[bytes]:
@@ -91,7 +100,6 @@ def create_app(settings: WakeListenerSettings, process_manager: ProcessManager |
                                      headers=response_headers,
                                      media_type=upstream_response.headers.get("content-type"))
 
-        upstream_response = await client.send(upstream_request)
         await client.aclose()
         response_headers = {k: v for k, v in upstream_response.headers.items()
                            if k.lower() not in _EXCLUDED_RESPONSE_HEADERS}
@@ -108,14 +116,21 @@ async def run_idle_check_once(tracker: ActivityTracker, process_manager: Process
     return False
 
 
-def _check_token(settings: WakeListenerSettings, request: Request) -> None:
+async def _idle_tick(tracker: ActivityTracker, process_manager: ProcessManager,
+                     idle_timeout_seconds: float) -> None:
+    try:
+        await run_idle_check_once(tracker, process_manager, idle_timeout_seconds)
+    except Exception:
+        logger.exception("wake listener idle check failed; will retry next interval")
+
+
+def _check_token(settings: WakeListenerSettings, request: Request, path: str) -> None:
     if not settings.auth_token:
         return
     if request.headers.get("authorization") == f"Bearer {settings.auth_token}":
         return
     # EventSource (used for the /events SSE path) cannot set custom headers — this
-    # is the one intentional exception to header-only auth, scoped to that path
-    # only by virtue of the dashboard only ever sending ?token= there.
-    if request.query_params.get("token") == settings.auth_token:
+    # is the one intentional exception to header-only auth, scoped to that path only.
+    if path.startswith(_STREAMED_PATH_PREFIXES) and request.query_params.get("token") == settings.auth_token:
         return
     raise HTTPException(status_code=401, detail="invalid or missing token")
