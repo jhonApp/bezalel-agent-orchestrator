@@ -1009,59 +1009,118 @@ class Component extends DCLogic {
       this.refreshDashboard();
       if (this.state.view === "quality") this.refreshQuality();
     }, 2000);
-    const eventsUrl = this.apiUrl("/events") + (this.apiToken ? "?token=" + encodeURIComponent(this.apiToken) : "");
-    this.eventSource = new EventSource(eventsUrl);
-    this.eventSource.addEventListener("orchestration", (message) => {
-      const event = JSON.parse(message.data);
-      this.handlePipelineEvent(event);
-      if (event.type === "agent.started" || event.type === "agent.finished") {
-        const running = event.status === "running";
-        this.setState((s) => ({ liveAgents: Object.assign({}, s.liveAgents, {
-          [event.agent]: { statusKey: running ? "running" : (event.status === "failed" || event.status === "blocked" ? "attention" : "idle") }
-        }) }));
-        if (event.type === "agent.started") {
-          // Clear stale activity from a previous run of this agent before the new one starts logging.
-          this.setState((s) => ({ agentActivity: Object.assign({}, s.agentActivity, { [event.agent]: { feed: [], lastLine: null, lastResult: null } }) }));
-        } else if (event.result) {
-          this.setState((s) => {
-            const previous = s.agentActivity[event.agent] || { feed: [] };
-            return { agentActivity: Object.assign({}, s.agentActivity, { [event.agent]: Object.assign({}, previous, {
-              lastResult: {
-                status: event.status, summary: event.result.summary || "",
-                filesChanged: event.result.files_changed || [], errors: event.result.errors || [],
-              },
-            }) }) };
-          });
-        }
-        this.pushLog((running ? "Agente iniciado: " : "Agente finalizado: ") + event.agent + " [" + event.status + "]");
-      } else if (event.type === "agent.stream") {
-        const raw = (event.raw || "").trim();
-        if (raw) {
-          const formatted = Component.formatStreamEvent(event.parsed, raw);
-          if (formatted.text) {
-            const time = new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-            this.setState((s) => {
-              const previous = s.agentActivity[event.agent] || { feed: [] };
-              const feed = [{ time: time, text: formatted.text, kind: formatted.kind, id: Component.nextStreamLineId() }].concat(previous.feed).slice(0, 30);
-              return { agentActivity: Object.assign({}, s.agentActivity, { [event.agent]: Object.assign({}, previous, { feed: feed, lastLine: formatted.text, lastLineKind: formatted.kind }) }) };
-            });
+    if (this.apiBase) {
+      // EventSource cannot set custom headers, so over a remote apiBase (ngrok) it can
+      // never send the "ngrok-skip-browser-warning" header the free tier requires, nor
+      // the Authorization header — read the same stream by hand over fetch() instead.
+      this.connectOrchestrationStream();
+    } else {
+      this.eventSource = new EventSource(this.apiUrl("/events"));
+      this.eventSource.addEventListener("orchestration", (message) => {
+        this.handleOrchestrationEvent(JSON.parse(message.data));
+      });
+      this.eventSource.onerror = () => this.showToast("Conexão ao vivo indisponível; atualizando por consulta.");
+    }
+  }
+
+  async connectOrchestrationStream() {
+    this._streamStopped = false;
+    const url = this.apiUrl("/events") + (this.apiToken ? "?token=" + encodeURIComponent(this.apiToken) : "");
+    while (!this._streamStopped) {
+      try {
+        const controller = new AbortController();
+        this._streamAbort = controller;
+        const response = await fetch(url, { headers: this.authHeaders(), signal: controller.signal });
+        if (!response.ok || !response.body) throw new Error("stream request failed: " + response.status);
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        while (true) {
+          const chunk = await reader.read();
+          if (chunk.done) break;
+          buffer += decoder.decode(chunk.value, { stream: true });
+          let sepIndex = buffer.indexOf("\n\n");
+          while (sepIndex !== -1) {
+            const rawFrame = buffer.slice(0, sepIndex);
+            buffer = buffer.slice(sepIndex + 2);
+            this.handleSseFrame(rawFrame);
+            sepIndex = buffer.indexOf("\n\n");
           }
         }
-      } else if (event.type === "state.updated") {
-        if (event.event === "execution.completed") {
-          const label = event.status === "completed" ? "concluída" : event.status === "cancelled" ? "cancelada" : "falhou";
-          this.showToast("Execução " + event.execution_id.slice(0, 8) + " " + label + ".");
-          this.pushLog("Execução finalizada [" + event.status + "]: " + event.execution_id);
-        } else {
-          this.pushLog("LangGraph: " + event.node + " [" + event.status + "]");
+      } catch (e) {
+        if (this._streamStopped) return;
+        this.showToast("Conexão ao vivo indisponível; atualizando por consulta.");
+      }
+      if (this._streamStopped) return;
+      await new Promise((resolve) => setTimeout(resolve, 3000));
+    }
+  }
+
+  handleSseFrame(rawFrame) {
+    let eventName = "message";
+    const dataLines = [];
+    rawFrame.split("\n").forEach((line) => {
+      if (line.indexOf("event:") === 0) eventName = line.slice(6).trim();
+      else if (line.indexOf("data:") === 0) dataLines.push(line.slice(5).trim());
+    });
+    if (eventName !== "orchestration" || !dataLines.length) return;
+    try {
+      this.handleOrchestrationEvent(JSON.parse(dataLines.join("\n")));
+    } catch (e) {
+      // malformed frame — drop it rather than crash the stream loop
+    }
+  }
+
+  handleOrchestrationEvent(event) {
+    this.handlePipelineEvent(event);
+    if (event.type === "agent.started" || event.type === "agent.finished") {
+      const running = event.status === "running";
+      this.setState((s) => ({ liveAgents: Object.assign({}, s.liveAgents, {
+        [event.agent]: { statusKey: running ? "running" : (event.status === "failed" || event.status === "blocked" ? "attention" : "idle") }
+      }) }));
+      if (event.type === "agent.started") {
+        // Clear stale activity from a previous run of this agent before the new one starts logging.
+        this.setState((s) => ({ agentActivity: Object.assign({}, s.agentActivity, { [event.agent]: { feed: [], lastLine: null, lastResult: null } }) }));
+      } else if (event.result) {
+        this.setState((s) => {
+          const previous = s.agentActivity[event.agent] || { feed: [] };
+          return { agentActivity: Object.assign({}, s.agentActivity, { [event.agent]: Object.assign({}, previous, {
+            lastResult: {
+              status: event.status, summary: event.result.summary || "",
+              filesChanged: event.result.files_changed || [], errors: event.result.errors || [],
+            },
+          }) }) };
+        });
+      }
+      this.pushLog((running ? "Agente iniciado: " : "Agente finalizado: ") + event.agent + " [" + event.status + "]");
+    } else if (event.type === "agent.stream") {
+      const raw = (event.raw || "").trim();
+      if (raw) {
+        const formatted = Component.formatStreamEvent(event.parsed, raw);
+        if (formatted.text) {
+          const time = new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+          this.setState((s) => {
+            const previous = s.agentActivity[event.agent] || { feed: [] };
+            const feed = [{ time: time, text: formatted.text, kind: formatted.kind, id: Component.nextStreamLineId() }].concat(previous.feed).slice(0, 30);
+            return { agentActivity: Object.assign({}, s.agentActivity, { [event.agent]: Object.assign({}, previous, { feed: feed, lastLine: formatted.text, lastLineKind: formatted.kind }) }) };
+          });
         }
       }
-      this.refreshDashboard();
-    });
-    this.eventSource.onerror = () => this.showToast("Conexão ao vivo indisponível; atualizando por consulta.");
+    } else if (event.type === "state.updated") {
+      if (event.event === "execution.completed") {
+        const label = event.status === "completed" ? "concluída" : event.status === "cancelled" ? "cancelada" : "falhou";
+        this.showToast("Execução " + event.execution_id.slice(0, 8) + " " + label + ".");
+        this.pushLog("Execução finalizada [" + event.status + "]: " + event.execution_id);
+      } else {
+        this.pushLog("LangGraph: " + event.node + " [" + event.status + "]");
+      }
+    }
+    this.refreshDashboard();
   }
 
   componentWillUnmount() {
+    this._streamStopped = true;
+    if (this._streamAbort) this._streamAbort.abort();
     if (this.eventSource) this.eventSource.close();
     if (this._dashboardPoll) clearInterval(this._dashboardPoll);
   }
@@ -1531,7 +1590,10 @@ class Component extends DCLogic {
   }
 
   authHeaders(extra) {
-    const headers = Object.assign({}, extra || {});
+    // ngrok's free tier shows an HTML interstitial to any request carrying a browser
+    // User-Agent unless this header is present — harmless to send always, including
+    // for local same-origin use where no tunnel is involved.
+    const headers = Object.assign({ "ngrok-skip-browser-warning": "true" }, extra || {});
     if (this.apiToken) headers["Authorization"] = "Bearer " + this.apiToken;
     return headers;
   }
