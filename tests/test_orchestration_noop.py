@@ -486,7 +486,7 @@ async def test_run_task_injects_known_project_context_into_the_prompt(tmp_path: 
         checkpoint_sqlite_path=tmp_path / "checkpoints.sqlite3",
         langgraph_checkpoint_sqlite_path=tmp_path / "langgraph.sqlite3",
     )
-    runtime = ExecutionRuntime(settings, codex=CapturingCodex())
+    runtime = ExecutionRuntime(settings, clis={"codex": CapturingCodex()})
     state = {
         "execution_id": "execution-1", "feature_request": "add a button", "worktrees": {},
         "detected_projects": [{
@@ -528,7 +528,7 @@ async def test_run_task_lowers_reasoning_effort_only_for_gate_roles(tmp_path: Pa
         checkpoint_sqlite_path=tmp_path / "checkpoints.sqlite3",
         langgraph_checkpoint_sqlite_path=tmp_path / "langgraph.sqlite3",
     )
-    runtime = ExecutionRuntime(settings, codex=CapturingCodex())
+    runtime = ExecutionRuntime(settings, clis={"codex": CapturingCodex()})
     state = {"execution_id": "execution-1", "feature_request": "add a button", "worktrees": {}, "detected_projects": []}
 
     for role in ("frontend", "contracts"):

@@ -144,7 +144,7 @@ async def test_run_task_adds_read_only_instruction_in_analysis_only_mode(tmp_pat
         langgraph_checkpoint_sqlite_path=tmp_path / "langgraph.sqlite3",
     )
     codex = CapturingCodex()
-    runtime = ExecutionRuntime(settings, codex=codex)
+    runtime = ExecutionRuntime(settings, clis={"codex": codex})
     state = {"execution_id": "exec-3", "feature_request": "analisa a segurança do frontend", "approvals": {"analysis_only": True}}
     task = {"task_id": "T001", "agent": "frontend", "project_id": "frontend", "description": "analyze security", "acceptance_criteria": []}
 
@@ -171,7 +171,7 @@ async def test_run_task_omits_read_only_instruction_outside_analysis_only_mode(t
         langgraph_checkpoint_sqlite_path=tmp_path / "langgraph.sqlite3",
     )
     codex = CapturingCodex()
-    runtime = ExecutionRuntime(settings, codex=codex)
+    runtime = ExecutionRuntime(settings, clis={"codex": codex})
     state = {"execution_id": "exec-4", "feature_request": "implementa um botão", "approvals": {}}
     task = {"task_id": "T001", "agent": "frontend", "project_id": "frontend", "description": "build it", "acceptance_criteria": []}
 

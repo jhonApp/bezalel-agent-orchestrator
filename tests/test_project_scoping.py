@@ -59,20 +59,20 @@ class FakeCodexForClassifier:
 async def test_classify_relevant_projects_filters_by_the_classifier_result(tmp_path: Path):
     settings = settings_for(tmp_path)
     runtime = ExecutionRuntime(settings, store=SQLiteCheckpointer(settings.checkpoint_path),
-                               codex=FakeCodexForClassifier({"frontend": True, "backend": False, "python": False}))
+                               clis={"codex": FakeCodexForClassifier({"frontend": True, "backend": False, "python": False})})
 
     relevant, source = await runtime.classify_relevant_projects("add a button", {"frontend", "backend", "python"})
 
     assert relevant == ["frontend"]
     assert source == "classifier"
-    assert runtime.codex.calls[0]["reasoning_effort"] == settings.codex_reasoning_effort_gates
+    assert runtime.clis["codex"].calls[0]["reasoning_effort"] == settings.codex_reasoning_effort_gates
 
 
 @pytest.mark.asyncio
 async def test_classify_relevant_projects_fails_open_when_the_classifier_returns_none(tmp_path: Path):
     settings = settings_for(tmp_path)
     runtime = ExecutionRuntime(settings, store=SQLiteCheckpointer(settings.checkpoint_path),
-                               codex=FakeCodexForClassifier(None))
+                               clis={"codex": FakeCodexForClassifier(None)})
 
     relevant, source = await runtime.classify_relevant_projects("add a button", {"frontend", "backend"})
 
@@ -84,7 +84,7 @@ async def test_classify_relevant_projects_fails_open_when_the_classifier_returns
 async def test_classify_relevant_projects_defaults_a_missing_field_to_relevant(tmp_path: Path):
     settings = settings_for(tmp_path)
     runtime = ExecutionRuntime(settings, store=SQLiteCheckpointer(settings.checkpoint_path),
-                               codex=FakeCodexForClassifier({"frontend": True}))
+                               clis={"codex": FakeCodexForClassifier({"frontend": True})})
 
     relevant, source = await runtime.classify_relevant_projects("add a button", {"frontend", "backend", "python"})
 
