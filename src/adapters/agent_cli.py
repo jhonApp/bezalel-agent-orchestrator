@@ -22,13 +22,16 @@ class AgentCLIAdapter(Protocol):
                            timeout: int = 120, reasoning_effort: str | None = None) -> dict[str, Any] | None: ...
 
 
-KNOWN_CLI_NAMES: set[str] = {"codex"}
+KNOWN_CLI_NAMES: set[str] = {"codex", "claude_code"}
 
 
 def build_cli(name: str, settings: Settings) -> AgentCLIAdapter:
     if name == "codex":
         from adapters.codex_cli import CodexCLI
         return CodexCLI(settings)
+    if name == "claude_code":
+        from adapters.claude_code_cli import ClaudeCodeCLI
+        return ClaudeCodeCLI(settings)
     raise ValueError(f"unknown agent CLI '{name}' — must be one of {sorted(KNOWN_CLI_NAMES)}")
 
 

@@ -39,6 +39,7 @@ class Settings(BaseModel):
     backend_path: Path
     python_path: Path
     codex_command: str = "codex"
+    claude_code_command: str = "claude"
     langsmith_api_key: str | None = None
     langsmith_endpoint: str | None = None
     langsmith_project: str = "bezalel-agent-orchestrator"
@@ -126,6 +127,7 @@ class Settings(BaseModel):
             backend_path=choose("BACKEND_PATH", ["bezalel-backend", "Bezalel"]),
             python_path=choose("PYTHON_PATH", ["bezalel-python", "Workflow-IA"]),
             codex_command=os.getenv("CODEX_COMMAND", "codex"),
+            claude_code_command=os.getenv("CLAUDE_CODE_COMMAND", "claude"),
             langsmith_api_key=os.getenv("LANGSMITH_CODEX_API_KEY") or os.getenv("LANGSMITH_API_KEY") or None,
             langsmith_endpoint=os.getenv("LANGSMITH_CODEX_ENDPOINT") or os.getenv("LANGSMITH_ENDPOINT") or None,
             langsmith_project=os.getenv("LANGSMITH_PROJECT", "bezalel-agent-orchestrator"),
