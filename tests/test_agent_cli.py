@@ -58,3 +58,17 @@ def test_validate_agent_roles_never_checks_fallback_cli():
     roles = {"frontend": {"cli": "codex", "fallback_cli": "not_built_yet"}}
 
     validate_agent_roles(roles, available_clis={"codex"})  # must not raise
+
+
+def test_the_real_agent_roles_validate_cleanly_against_codex_only():
+    from agents.registry import AGENT_ROLES
+
+    validate_agent_roles(AGENT_ROLES, available_clis={"codex"})  # must not raise
+
+
+def test_every_real_agent_role_defaults_to_codex_with_no_fallback():
+    from agents.registry import AGENT_ROLES
+
+    for role, config in AGENT_ROLES.items():
+        assert config.get("cli") == "codex", f"role '{role}' should default to cli='codex'"
+        assert config.get("fallback_cli") is None, f"role '{role}' should default to no fallback_cli"
