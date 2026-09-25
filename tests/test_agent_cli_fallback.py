@@ -63,6 +63,9 @@ def settings_with_command(tmp_path: Path, script_name: str, script_source: str) 
 async def test_run_task_falls_back_once_when_the_primary_hits_its_rate_limit(tmp_path: Path, monkeypatch):
     primary_settings = settings_with_command(tmp_path, "primary.py", RATE_LIMIT_SCRIPT)
     secondary_settings = settings_with_command(tmp_path, "secondary.py", COMPLETED_SCRIPT)
+    # "codex" here only satisfies validate_agent_roles for the other 7 roles (all still
+    # default to cli="codex") — "frontend" is patched below to "primary", so this entry is
+    # never looked up or dispatched to in this test.
     clis = {"primary": CodexCLI(primary_settings), "secondary": CodexCLI(secondary_settings), "codex": CodexCLI(primary_settings)}
     monkeypatch.setitem(AGENT_ROLES["frontend"], "cli", "primary")
     monkeypatch.setitem(AGENT_ROLES["frontend"], "fallback_cli", "secondary")
@@ -75,11 +78,16 @@ async def test_run_task_falls_back_once_when_the_primary_hits_its_rate_limit(tmp
     assert result.status == "completed"
     assert result.summary == "handled by fallback"
     assert result.cli_used == "secondary"
+    # The rejected primary attempt's tokens must not leak into the task's outcome — only
+    # the fallback's own usage (from COMPLETED_SCRIPT's tokens_input=5) counts.
+    assert result.tokens_input == 5
+    assert result.tokens_output == 3
 
 
 @pytest.mark.asyncio
 async def test_run_task_returns_the_rate_limited_result_unchanged_with_no_fallback_configured(tmp_path: Path, monkeypatch):
     primary_settings = settings_with_command(tmp_path, "primary.py", RATE_LIMIT_SCRIPT)
+    # "codex" only satisfies validate_agent_roles for the other 7 roles; never dispatched to.
     clis = {"primary": CodexCLI(primary_settings), "codex": CodexCLI(primary_settings)}
     monkeypatch.setitem(AGENT_ROLES["frontend"], "cli", "primary")
     monkeypatch.setitem(AGENT_ROLES["frontend"], "fallback_cli", None)
@@ -99,6 +107,7 @@ async def test_run_task_does_not_fall_back_on_a_genuine_failure(tmp_path: Path, 
     that fails for an ordinary reason should not silently retry on a different CLI."""
     primary_settings = settings_with_command(tmp_path, "primary.py", FAILED_SCRIPT)
     secondary_settings = settings_with_command(tmp_path, "secondary.py", COMPLETED_SCRIPT)
+    # "codex" only satisfies validate_agent_roles for the other 7 roles; never dispatched to.
     clis = {"primary": CodexCLI(primary_settings), "secondary": CodexCLI(secondary_settings), "codex": CodexCLI(primary_settings)}
     monkeypatch.setitem(AGENT_ROLES["frontend"], "cli", "primary")
     monkeypatch.setitem(AGENT_ROLES["frontend"], "fallback_cli", "secondary")
@@ -109,6 +118,25 @@ async def test_run_task_does_not_fall_back_on_a_genuine_failure(tmp_path: Path, 
     result = await runtime.run_task(state, task)
 
     assert result.status == "failed"
+    assert result.cli_used == "primary"
+
+
+@pytest.mark.asyncio
+async def test_run_task_returns_the_rate_limited_result_when_the_fallback_cli_is_unregistered(tmp_path: Path, monkeypatch):
+    """A role may declare a fallback_cli that doesn't exist yet in self.clis (e.g. a typo, or
+    naming a real adapter before it's built) — that must resolve to "no fallback available"
+    lazily, at dispatch time, not raise anywhere."""
+    primary_settings = settings_with_command(tmp_path, "primary.py", RATE_LIMIT_SCRIPT)
+    clis = {"primary": CodexCLI(primary_settings), "codex": CodexCLI(primary_settings)}
+    monkeypatch.setitem(AGENT_ROLES["frontend"], "cli", "primary")
+    monkeypatch.setitem(AGENT_ROLES["frontend"], "fallback_cli", "ghost")
+    runtime = ExecutionRuntime(primary_settings, clis=clis)
+    state = {"execution_id": "execution-1", "feature_request": "add a button", "worktrees": {}, "detected_projects": []}
+    task = {"task_id": "T001", "agent": "frontend", "project_id": "frontend", "description": "do it", "acceptance_criteria": []}
+
+    result = await runtime.run_task(state, task)
+
+    assert result.status == "rate_limited"
     assert result.cli_used == "primary"
 
 

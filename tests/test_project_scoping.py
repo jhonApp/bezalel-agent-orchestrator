@@ -92,6 +92,26 @@ async def test_classify_relevant_projects_defaults_a_missing_field_to_relevant(t
     assert source == "classifier"
 
 
+@pytest.mark.asyncio
+async def test_classify_relevant_projects_honors_the_classifiers_own_cli_config(tmp_path: Path, monkeypatch):
+    """Final-review finding: validate_agent_roles checks AGENT_ROLES["classifier"]["cli"] at
+    boot (it iterates every role, this one included) — pinning the dispatch to "codex"
+    unconditionally would make that validation check a field it then silently ignores."""
+    from agents.registry import AGENT_ROLES
+    monkeypatch.setitem(AGENT_ROLES["classifier"], "cli", "alt")
+    settings = settings_for(tmp_path)
+    codex_adapter = FakeCodexForClassifier({"frontend": True})
+    alt_adapter = FakeCodexForClassifier({"frontend": True, "backend": True, "python": True})
+    runtime = ExecutionRuntime(settings, store=SQLiteCheckpointer(settings.checkpoint_path),
+                               clis={"codex": codex_adapter, "alt": alt_adapter})
+
+    relevant, source = await runtime.classify_relevant_projects("add a button", {"frontend", "backend", "python"})
+
+    assert not codex_adapter.calls, "the unconfigured 'codex' adapter must not be called"
+    assert len(alt_adapter.calls) == 1
+    assert set(relevant) == {"frontend", "backend", "python"}
+
+
 class StubClassifyRuntime:
     def __init__(self, relevant):
         self._relevant = relevant

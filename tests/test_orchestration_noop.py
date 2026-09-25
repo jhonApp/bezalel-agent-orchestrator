@@ -101,6 +101,52 @@ async def test_run_gate_agent_across_projects_sums_real_tokens_and_cost_across_p
     assert result.estimated_cost == pytest.approx(0.03)
 
 
+class CliTaggedRuntime:
+    """Stub whose run_task returns a distinct cli_used per project, to prove
+    _run_gate_agent_across_projects propagates it into the merged result instead of
+    dropping it — the same class of bug already fixed for tokens/cost above."""
+
+    def __init__(self, cli_used_by_project: dict[str, str]) -> None:
+        self._cli_used_by_project = cli_used_by_project
+
+    async def run_task(self, state, task):
+        return AgentResult(agent="reviewer", status="completed", summary=f"ok {task['project_id']}",
+                           cli_used=self._cli_used_by_project[task["project_id"]])
+
+    def workdir_for(self, state, project_id):
+        return Path(".")
+
+    async def announce_agent_started(self, state, task):
+        return None
+
+    async def announce_agent_finished(self, state, task):
+        return None
+
+
+@pytest.mark.asyncio
+async def test_run_gate_agent_across_projects_reports_a_single_cli_when_every_project_agrees():
+    task = {"task_id": "T013", "agent": "reviewer", "status": "pending", "description": "review the diff"}
+    state = {"worktrees": {}}
+    runtime = CliTaggedRuntime({"frontend": "codex", "backend": "codex"})
+
+    result = await nodes._run_gate_agent_across_projects(runtime, state, task, ["frontend", "backend"])
+
+    assert result.cli_used == "codex"
+
+
+@pytest.mark.asyncio
+async def test_run_gate_agent_across_projects_lists_every_cli_when_projects_disagree():
+    """A fallback can rescue one project's task but not another's in the same gate run —
+    the merged result must say both ran, not silently report just the first project's CLI."""
+    task = {"task_id": "T013", "agent": "reviewer", "status": "pending", "description": "review the diff"}
+    state = {"worktrees": {}}
+    runtime = CliTaggedRuntime({"frontend": "codex", "backend": "claude_code"})
+
+    result = await nodes._run_gate_agent_across_projects(runtime, state, task, ["frontend", "backend"])
+
+    assert result.cli_used == "claude_code, codex"
+
+
 @pytest.mark.asyncio
 async def test_contract_validation_completes_without_agent_when_no_files_changed(monkeypatch):
     async def no_changed_projects(runtime, state):

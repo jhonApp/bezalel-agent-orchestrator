@@ -229,10 +229,13 @@ class ExecutionRuntime:
         """
         prompt = role_prompt("classifier", self.settings.orchestrator_root / "prompts")
         prompt += f"\n\nFeature request:\n{feature_request}"
-        # The classifier is infrastructure, not a per-role dispatched agent — it always
-        # runs on the codex adapter regardless of any role's cli/fallback_cli config.
-        result = await self.clis["codex"].execute_json(prompt, self.settings.workspace_root, CLASSIFIER_SCHEMA, "Classifier",
-                                                        reasoning_effort=self.settings.codex_reasoning_effort_gates)
+        # validate_agent_roles already checks AGENT_ROLES["classifier"]["cli"] at boot (it
+        # iterates every role, this one included) — honoring it here too, instead of pinning
+        # to "codex" unconditionally, is what makes that validation mean something: a role's
+        # cli must never be checked at startup and then silently ignored at dispatch.
+        classifier_cli = self.clis[AGENT_ROLES.get("classifier", {}).get("cli", "codex")]
+        result = await classifier_cli.execute_json(prompt, self.settings.workspace_root, CLASSIFIER_SCHEMA, "Classifier",
+                                                    reasoning_effort=self.settings.codex_reasoning_effort_gates)
         if result is None:
             return sorted(existing), "fail_open"
         domains = {"frontend": "frontend", "backend": "backend", "python": "python"}
@@ -466,6 +469,11 @@ async def _run_gate_agent_across_projects(runtime: ExecutionRuntime, state: dict
             await on_project_result(project_id, agent_result)
     statuses = [r.status for r in per_project]
     overall_status = "completed" if all(s == "completed" for s in statuses) else next(s for s in statuses if s != "completed")
+    # A fallback can make different projects in the same gate run be served by different
+    # CLIs — collapse to a single name only when every project actually agrees, otherwise
+    # list which ones ran where rather than silently reporting just the first.
+    clis_used = {r.cli_used or "?" for r in per_project}
+    merged_cli_used = next(iter(clis_used)) if len(clis_used) == 1 else ", ".join(sorted(clis_used))
     return AgentResult(
         agent=task["agent"], status=overall_status,
         summary="; ".join(f"[{project}] {r.summary}" for project, r in zip(changed_projects, per_project)),
@@ -474,6 +482,7 @@ async def _run_gate_agent_across_projects(runtime: ExecutionRuntime, state: dict
         tokens_input=sum(r.tokens_input for r in per_project),
         tokens_output=sum(r.tokens_output for r in per_project),
         estimated_cost=sum(r.estimated_cost for r in per_project),
+        cli_used=merged_cli_used,
     )
 
 
