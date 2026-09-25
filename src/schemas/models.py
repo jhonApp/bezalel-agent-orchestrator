@@ -74,6 +74,7 @@ class AgentResult(BaseModel):
     estimated_cost: float = 0.0
     raw_response: str = ""
     quality: dict[str, Any] | None = None
+    cli_used: str | None = None
 
 
 class ContractFinding(BaseModel):

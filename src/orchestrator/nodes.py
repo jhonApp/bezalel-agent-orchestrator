@@ -10,7 +10,8 @@ from typing import Any, Awaitable, Callable
 
 from agents.registry import AGENT_ROLES, GATE_ROLES, role_prompt
 from agents.security import scan_project
-from adapters.codex_cli import CLASSIFIER_SCHEMA, CodexCLI
+from adapters.agent_cli import AgentCLIAdapter, build_cli, validate_agent_roles
+from adapters.codex_cli import CLASSIFIER_SCHEMA
 from adapters.command import run_command
 from adapters.deploy import DeployAdapter
 from adapters.git import GitError, GitManager
@@ -26,11 +27,13 @@ from schemas.models import AgentResult, ContractFinding, DeployResult, ReviewRes
 
 
 class ExecutionRuntime:
-    def __init__(self, settings: Settings, store: SQLiteCheckpointer | None = None, codex: CodexCLI | None = None,
+    def __init__(self, settings: Settings, store: SQLiteCheckpointer | None = None,
+                 clis: dict[str, AgentCLIAdapter] | None = None,
                  event_sink: Callable[[dict[str, Any]], Awaitable[None]] | None = None):
         self.settings = settings
         self.store = store or SQLiteCheckpointer(settings.checkpoint_path)
-        self.codex = codex or CodexCLI(settings)
+        self.clis = clis or {"codex": build_cli("codex", settings)}
+        validate_agent_roles(AGENT_ROLES, available_clis=set(self.clis.keys()))
         self.deploy = DeployAdapter(settings)
         self.health = ContextHealthMonitor(settings)
         self.tracing = LangSmithObserver(settings)
@@ -112,21 +115,24 @@ class ExecutionRuntime:
                 "agent": role, "task_id": task["task_id"], **event,
             })
 
+        role_config = AGENT_ROLES.get(role, {})
+        cli = self.clis[role_config.get("cli", "codex")]
+        fallback_cli_name = role_config.get("fallback_cli")
         reasoning_effort = self.settings.codex_reasoning_effort_gates if role in GATE_ROLES else None
         attempts = 0
         last: AgentResult | None = None
         while attempts <= self.settings.max_retries:
             attempts += 1
             task["attempts"] = attempts
-            result = await self.codex.execute(prompt, workdir, AGENT_ROLES.get(role, {}).get("label", role),
-                                              timeout=self.settings.agent_timeout_seconds, cancel_event=self.cancel_event(state["execution_id"]),
-                                              trace_metadata={
-                                                  "orchestrator_execution_id": state["execution_id"],
-                                                  "orchestrator_task_id": task["task_id"],
-                                                  "orchestrator_project_id": task["project_id"],
-                                                  "context_health": state.get("context_health", {}),
-                                              },
-                                              on_event=on_event, reasoning_effort=reasoning_effort)
+            result = await cli.execute(prompt, workdir, AGENT_ROLES.get(role, {}).get("label", role),
+                                       timeout=self.settings.agent_timeout_seconds, cancel_event=self.cancel_event(state["execution_id"]),
+                                       trace_metadata={
+                                           "orchestrator_execution_id": state["execution_id"],
+                                           "orchestrator_task_id": task["task_id"],
+                                           "orchestrator_project_id": task["project_id"],
+                                           "context_health": state.get("context_health", {}),
+                                       },
+                                       on_event=on_event, reasoning_effort=reasoning_effort)
             last = result
             # A real usage-limit hit is not transient the way a timeout or a flaky tool call
             # is: the account-wide quota it reports against does not reset within this loop's
@@ -138,6 +144,30 @@ class ExecutionRuntime:
             state["retries"] = int(state.get("retries", 0)) + 1
             if attempts <= self.settings.max_retries:
                 await asyncio.sleep(self.settings.retry_backoff_seconds * (2 ** (attempts - 1)))
+
+        # The fallback is a single attempt on a different CLI, never its own retry loop -
+        # hammering a second rate-limited resource is not a recovery strategy. It only
+        # fires for rate_limited specifically: a genuine failure is not evidence a
+        # different CLI would have done better.
+        if last is not None and last.status == "rate_limited" and fallback_cli_name:
+            fallback = self.clis.get(fallback_cli_name)
+            if fallback is not None:
+                fallback_result = await fallback.execute(
+                    prompt, workdir, AGENT_ROLES.get(role, {}).get("label", role),
+                    timeout=self.settings.agent_timeout_seconds, cancel_event=self.cancel_event(state["execution_id"]),
+                    trace_metadata={
+                        "orchestrator_execution_id": state["execution_id"],
+                        "orchestrator_task_id": task["task_id"],
+                        "orchestrator_project_id": task["project_id"],
+                        "context_health": state.get("context_health", {}),
+                    },
+                    on_event=on_event, reasoning_effort=reasoning_effort,
+                )
+                fallback_result.cli_used = fallback_cli_name
+                return fallback_result
+
+        if last is not None:
+            last.cli_used = role_config.get("cli", "codex")
         return last or AgentResult(agent=role, status="failed", summary="agent did not return")
 
     @staticmethod
@@ -199,8 +229,10 @@ class ExecutionRuntime:
         """
         prompt = role_prompt("classifier", self.settings.orchestrator_root / "prompts")
         prompt += f"\n\nFeature request:\n{feature_request}"
-        result = await self.codex.execute_json(prompt, self.settings.workspace_root, CLASSIFIER_SCHEMA, "Classifier",
-                                               reasoning_effort=self.settings.codex_reasoning_effort_gates)
+        # The classifier is infrastructure, not a per-role dispatched agent — it always
+        # runs on the codex adapter regardless of any role's cli/fallback_cli config.
+        result = await self.clis["codex"].execute_json(prompt, self.settings.workspace_root, CLASSIFIER_SCHEMA, "Classifier",
+                                                        reasoning_effort=self.settings.codex_reasoning_effort_gates)
         if result is None:
             return sorted(existing), "fail_open"
         domains = {"frontend": "frontend", "backend": "backend", "python": "python"}
