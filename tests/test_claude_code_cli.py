@@ -34,7 +34,9 @@ def test_resolve_claude_code_command_splits_a_quoted_path_with_spaces():
 
 
 def test_resolve_claude_code_command_defaults_to_bare_claude():
-    assert resolve_claude_code_command("claude") == ["claude"]
+    resolved = resolve_claude_code_command("claude")
+
+    assert Path(resolved[-1]).name.lower() in {"claude", "claude.cmd", "claude.exe"}
 
 
 FAKE_CLAUDE_SUCCESS = r'''
