@@ -252,3 +252,27 @@ def test_build_cli_returns_a_claude_code_cli_for_the_claude_code_name(tmp_path: 
     assert isinstance(adapter, ClaudeCodeCLI)
     assert "claude_code" in KNOWN_CLI_NAMES
     assert "codex" in KNOWN_CLI_NAMES
+
+
+@pytest.mark.asyncio
+async def test_run_task_dispatches_to_a_real_claude_code_adapter_when_a_role_is_configured_for_it(tmp_path: Path, monkeypatch):
+    """Proves the Spec-1 dispatch path (ExecutionRuntime.run_task resolving
+    AGENT_ROLES[role]["cli"] through self.clis) actually reaches a real ClaudeCodeCLI,
+    not just that ClaudeCodeCLI works when called directly."""
+    from agents.registry import AGENT_ROLES
+    from orchestrator.nodes import ExecutionRuntime
+
+    command = write_script(tmp_path, "fake_claude_success.py", FAKE_CLAUDE_SUCCESS)
+    claude_settings = settings_for(tmp_path, command)
+    codex_settings = settings_for(tmp_path, "codex")  # never invoked; satisfies validate_agent_roles for the other 7 roles
+    clis = {"codex": ClaudeCodeCLI(codex_settings), "claude_code": ClaudeCodeCLI(claude_settings)}
+    monkeypatch.setitem(AGENT_ROLES["frontend"], "cli", "claude_code")
+    runtime = ExecutionRuntime(claude_settings, clis=clis)
+    state = {"execution_id": "execution-1", "feature_request": "add a button", "worktrees": {}, "detected_projects": []}
+    task = {"task_id": "T001", "agent": "frontend", "project_id": "frontend", "description": "do it", "acceptance_criteria": []}
+
+    result = await runtime.run_task(state, task)
+
+    assert result.status == "completed"
+    assert result.cli_used == "claude_code"
+    assert result.tokens_input == 4
