@@ -77,10 +77,14 @@ class ClaudeCodeCLI:
         full_prompt = (f"You are the {role} agent in the Bezalel orchestrator.\n\n{prompt}\n\n"
                        "Return only a JSON object matching the supplied schema in your final "
                        "response. Never include secrets or private model reasoning.\n")
-        process = await asyncio.create_subprocess_exec(
-            *command, cwd=str(workdir.resolve()),
-            stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-        )
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *command, cwd=str(workdir.resolve()),
+                stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            )
+        except OSError as exc:
+            return AgentResult(agent=role, status="failed", summary="Claude Code CLI unavailable", errors=[str(exc)],
+                               duration_seconds=time.perf_counter() - started)
         communicate_task = asyncio.create_task(process.communicate(full_prompt.encode("utf-8")))
         deadline = time.monotonic() + timeout
         while not communicate_task.done():
@@ -102,8 +106,11 @@ class ClaudeCodeCLI:
 
     def _parse(self, raw: str, role: str) -> AgentResult:
         raw = raw.strip()
+        if not raw:
+            return AgentResult(agent=role, status="failed", summary="Claude Code returned no valid JSON",
+                               errors=["structured output could not be parsed"])
         try:
-            data = json.loads(raw) if raw else {}
+            data = json.loads(raw)
         except json.JSONDecodeError:
             return AgentResult(agent=role, status="failed", summary="Claude Code returned no valid JSON",
                                errors=["structured output could not be parsed"])
@@ -139,10 +146,13 @@ class ClaudeCodeCLI:
             command += ["--model", self._model_for_effort(reasoning_effort)]
         full_prompt = (f"You are the {label} in the Bezalel orchestrator.\n\n{prompt}\n\n"
                        "Return only a JSON object matching the supplied schema in your final response.\n")
-        process = await asyncio.create_subprocess_exec(
-            *command, cwd=str(workdir.resolve()),
-            stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-        )
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *command, cwd=str(workdir.resolve()),
+                stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            )
+        except OSError:
+            return None
         try:
             stdout, _stderr = await asyncio.wait_for(process.communicate(full_prompt.encode("utf-8")), timeout=timeout)
         except asyncio.TimeoutError:

@@ -86,6 +86,11 @@ print("not valid json at all")
 sys.exit(1)
 '''
 
+FAKE_CLAUDE_EMPTY = r'''
+import sys
+sys.exit(1)
+'''
+
 FAKE_CLAUDE_HANGS = r'''
 import time
 time.sleep(30)
@@ -135,6 +140,17 @@ async def test_execute_maps_a_429_style_error_to_rate_limited(tmp_path: Path):
 @pytest.mark.asyncio
 async def test_execute_fails_cleanly_on_malformed_output(tmp_path: Path):
     command = write_script(tmp_path, "fake_claude_malformed.py", FAKE_CLAUDE_MALFORMED)
+    settings = settings_for(tmp_path, command)
+
+    result = await ClaudeCodeCLI(settings).execute("do it", tmp_path, "frontend")
+
+    assert result.status == "failed"
+    assert result.errors == ["structured output could not be parsed"]
+
+
+@pytest.mark.asyncio
+async def test_execute_fails_cleanly_on_empty_stdout(tmp_path: Path):
+    command = write_script(tmp_path, "fake_claude_empty.py", FAKE_CLAUDE_EMPTY)
     settings = settings_for(tmp_path, command)
 
     result = await ClaudeCodeCLI(settings).execute("do it", tmp_path, "frontend")
@@ -203,6 +219,25 @@ async def test_execute_json_returns_none_on_timeout(tmp_path: Path):
     settings = settings_for(tmp_path, command)
 
     result = await ClaudeCodeCLI(settings).execute_json("classify this", tmp_path, {"type": "object"}, "Classifier", timeout=1)
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_execute_returns_failed_when_the_claude_binary_does_not_exist(tmp_path: Path):
+    settings = settings_for(tmp_path, "C:/definitely/not/a/real/path/claude-nonexistent.exe")
+
+    result = await ClaudeCodeCLI(settings).execute("do it", tmp_path, "frontend")
+
+    assert result.status == "failed"
+    assert "unavailable" in result.summary.lower()
+
+
+@pytest.mark.asyncio
+async def test_execute_json_returns_none_when_the_claude_binary_does_not_exist(tmp_path: Path):
+    settings = settings_for(tmp_path, "C:/definitely/not/a/real/path/claude-nonexistent.exe")
+
+    result = await ClaudeCodeCLI(settings).execute_json("classify this", tmp_path, {"type": "object"}, "Classifier")
 
     assert result is None
 
