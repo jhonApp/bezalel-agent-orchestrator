@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
-from adapters.codex_cli import AGENT_SCHEMA
+from adapters.codex_cli import AGENT_SCHEMA, CodexCLI
 from adapters.command import which
 from orchestrator.config import Settings
 from schemas.models import AgentResult
@@ -99,21 +99,31 @@ class ClaudeCodeCLI:
                 return AgentResult(agent=role, status="failed", summary="Claude Code timeout", errors=["agent timeout"],
                                    duration_seconds=time.perf_counter() - started)
             await asyncio.sleep(0.2)
-        stdout, _stderr = communicate_task.result()
+        stdout, stderr = communicate_task.result()
         result = self._parse(stdout.decode(errors="replace"), role)
         result.duration_seconds = time.perf_counter() - started
+        # This adapter's first real use is the middle of an outage on the primary CLI — the
+        # worst possible moment to have no diagnostics. Mirror CodexCLI: keep a redacted,
+        # truncated tail of whatever came back, and fold stderr into errors on any non-success.
+        err_text = CodexCLI._redact(stderr.decode(errors="replace"))
+        diagnostic = stdout.decode(errors="replace") or err_text
+        result.raw_response = CodexCLI._redact(diagnostic)[-self.settings.max_output_chars:]
+        if result.status != "completed" and err_text.strip():
+            result.errors.append(err_text[-2000:])
         return result
 
     def _parse(self, raw: str, role: str) -> AgentResult:
         raw = raw.strip()
+        parse_failure = AgentResult(agent=role, status="failed", summary="Claude Code returned no valid JSON",
+                                    errors=["structured output could not be parsed"])
         if not raw:
-            return AgentResult(agent=role, status="failed", summary="Claude Code returned no valid JSON",
-                               errors=["structured output could not be parsed"])
+            return parse_failure
         try:
             data = json.loads(raw)
         except json.JSONDecodeError:
-            return AgentResult(agent=role, status="failed", summary="Claude Code returned no valid JSON",
-                               errors=["structured output could not be parsed"])
+            return parse_failure
+        if not isinstance(data, dict):
+            return parse_failure
         if data.get("is_error"):
             message = data.get("result") or "Claude Code reported an error"
             status = "rate_limited" if data.get("api_error_status") == _RATE_LIMIT_API_STATUS else "failed"
@@ -131,13 +141,24 @@ class ClaudeCodeCLI:
         # a model's self-reported usage instead of the CLI's real figure). Spreading
         # `structured` FIRST and placing the real `usage`-derived keys AFTER it means the
         # real values win the dict-literal's later-key-wins rule — never reorder this.
-        return AgentResult.model_validate({
-            "agent": role,
-            **structured,
-            "tokens_input": usage.get("input_tokens", 0),
-            "tokens_output": usage.get("output_tokens", 0),
-            "estimated_cost": data.get("total_cost_usd", 0.0),
-        })
+        try:
+            return AgentResult.model_validate({
+                "agent": role,
+                **structured,
+                "tokens_input": usage.get("input_tokens", 0),
+                "tokens_output": usage.get("output_tokens", 0),
+                "estimated_cost": data.get("total_cost_usd", 0.0),
+            })
+        except (ValueError, TypeError) as exc:
+            # A "success" response with no structured_output (a real shape this CLI emits —
+            # see the design spec's finding #1), a null structured_output, or a field of the
+            # wrong type all reach here as a pydantic ValidationError (a ValueError subclass).
+            # CodexCLI already degrades this class of problem to a plain failed result
+            # instead of propagating it — matching that here, since callers like
+            # _run_gate_agent_across_projects (orchestrator/nodes.py) call run_task with no
+            # guard of their own.
+            return AgentResult(agent=role, status="failed", summary="Claude Code response did not match the expected shape",
+                               errors=[str(exc)])
 
     async def execute_json(self, prompt: str, workdir: Path, schema: dict[str, Any], label: str,
                            timeout: int = 120, reasoning_effort: str | None = None) -> dict[str, Any] | None:
@@ -163,6 +184,6 @@ class ClaudeCodeCLI:
             data = json.loads(stdout.decode(errors="replace").strip())
         except json.JSONDecodeError:
             return None
-        if data.get("is_error"):
+        if not isinstance(data, dict) or data.get("is_error"):
             return None
         return data.get("structured_output")

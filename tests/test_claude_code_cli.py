@@ -276,3 +276,122 @@ async def test_run_task_dispatches_to_a_real_claude_code_adapter_when_a_role_is_
     assert result.status == "completed"
     assert result.cli_used == "claude_code"
     assert result.tokens_input == 4
+
+
+# Final-review findings: real response shapes CodexCLI already degrades gracefully but
+# ClaudeCodeCLI's _parse used to raise an uncaught ValidationError/AttributeError on.
+
+FAKE_CLAUDE_SUCCESS_NO_STRUCTURED_OUTPUT = r'''
+import json
+import sys
+print(json.dumps({
+    "type": "result", "subtype": "success", "is_error": False,
+    "result": "plain text answer, no structured_output field at all",
+    "total_cost_usd": 0.01,
+    "usage": {"input_tokens": 2, "output_tokens": 3},
+}))
+sys.exit(0)
+'''
+
+FAKE_CLAUDE_NULL_STRUCTURED_OUTPUT = r'''
+import json
+import sys
+print(json.dumps({
+    "type": "result", "subtype": "success", "is_error": False,
+    "result": "null structured_output",
+    "total_cost_usd": 0.01,
+    "usage": {"input_tokens": 2, "output_tokens": 3},
+    "structured_output": None,
+}))
+sys.exit(0)
+'''
+
+FAKE_CLAUDE_LIST_RESPONSE = r'''
+import json
+import sys
+print(json.dumps([{"unexpected": "top-level list, not an object"}]))
+sys.exit(0)
+'''
+
+FAKE_CLAUDE_ERROR_WITH_STDERR = r'''
+import json
+import sys
+print("diagnostic detail on stderr", file=sys.stderr)
+print(json.dumps({
+    "type": "result", "subtype": "success", "is_error": True,
+    "api_error_status": 500,
+    "result": "internal error",
+    "total_cost_usd": 0, "usage": {"input_tokens": 0, "output_tokens": 0},
+}))
+sys.exit(1)
+'''
+
+
+@pytest.mark.asyncio
+async def test_execute_degrades_gracefully_when_a_success_response_has_no_structured_output(tmp_path: Path):
+    """A real shape this CLI emits (design spec finding #1: a success response with only
+    `result`, no `structured_output`) must not raise — AgentResult.status has no default,
+    so building it from an empty structured dict used to raise an uncaught ValidationError."""
+    command = write_script(tmp_path, "fake_claude_no_structured.py", FAKE_CLAUDE_SUCCESS_NO_STRUCTURED_OUTPUT)
+    settings = settings_for(tmp_path, command)
+
+    result = await ClaudeCodeCLI(settings).execute("do it", tmp_path, "frontend")
+
+    assert result.status == "failed"
+
+
+@pytest.mark.asyncio
+async def test_execute_degrades_gracefully_when_structured_output_is_explicitly_null(tmp_path: Path):
+    command = write_script(tmp_path, "fake_claude_null_structured.py", FAKE_CLAUDE_NULL_STRUCTURED_OUTPUT)
+    settings = settings_for(tmp_path, command)
+
+    result = await ClaudeCodeCLI(settings).execute("do it", tmp_path, "frontend")
+
+    assert result.status == "failed"
+
+
+@pytest.mark.asyncio
+async def test_execute_degrades_gracefully_when_the_top_level_response_is_a_list(tmp_path: Path):
+    command = write_script(tmp_path, "fake_claude_list.py", FAKE_CLAUDE_LIST_RESPONSE)
+    settings = settings_for(tmp_path, command)
+
+    result = await ClaudeCodeCLI(settings).execute("do it", tmp_path, "frontend")
+
+    assert result.status == "failed"
+    assert result.errors == ["structured output could not be parsed"]
+
+
+@pytest.mark.asyncio
+async def test_execute_json_returns_none_when_the_top_level_response_is_a_list(tmp_path: Path):
+    command = write_script(tmp_path, "fake_claude_list.py", FAKE_CLAUDE_LIST_RESPONSE)
+    settings = settings_for(tmp_path, command)
+
+    result = await ClaudeCodeCLI(settings).execute_json("classify this", tmp_path, {"type": "object"}, "Classifier")
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_execute_captures_stderr_and_raw_response_on_failure(tmp_path: Path):
+    """This adapter's first real use is the middle of an outage on the primary CLI — the
+    worst possible moment to have zero diagnostics. A failure must carry stderr and a raw
+    response tail, not just a generic message."""
+    command = write_script(tmp_path, "fake_claude_stderr.py", FAKE_CLAUDE_ERROR_WITH_STDERR)
+    settings = settings_for(tmp_path, command)
+
+    result = await ClaudeCodeCLI(settings).execute("do it", tmp_path, "frontend")
+
+    assert result.status == "failed"
+    assert result.raw_response != ""
+    assert any("diagnostic detail on stderr" in err for err in result.errors)
+
+
+@pytest.mark.asyncio
+async def test_execute_sets_raw_response_on_success_too(tmp_path: Path):
+    command = write_script(tmp_path, "fake_claude_success2.py", FAKE_CLAUDE_SUCCESS)
+    settings = settings_for(tmp_path, command)
+
+    result = await ClaudeCodeCLI(settings).execute("do it", tmp_path, "frontend")
+
+    assert result.status == "completed"
+    assert "structured_output" in result.raw_response or "completed" in result.raw_response
