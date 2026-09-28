@@ -152,3 +152,19 @@ async def test_execution_runtime_raises_at_construction_for_an_unavailable_prima
 
     with pytest.raises(ValueError, match="frontend.*totally_not_registered"):
         ExecutionRuntime(settings)
+
+
+def test_execution_runtime_builds_every_known_cli_by_default(tmp_path: Path) -> None:
+    from adapters.agent_cli import KNOWN_CLI_NAMES
+
+    settings = Settings(
+        orchestrator_root=tmp_path, workspace_root=tmp_path, frontend_path=tmp_path,
+        backend_path=tmp_path, python_path=tmp_path,
+        claude_code_command="C:/definitely/not/a/real/path/claude-nonexistent.exe",
+        checkpoint_sqlite_path=tmp_path / "checkpoints-default-clis.sqlite3",
+        langgraph_checkpoint_sqlite_path=tmp_path / "langgraph-default-clis.sqlite3",
+    )
+
+    runtime = ExecutionRuntime(settings)
+
+    assert set(runtime.clis.keys()) == KNOWN_CLI_NAMES

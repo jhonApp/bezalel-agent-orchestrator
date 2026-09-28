@@ -10,7 +10,7 @@ from typing import Any, Awaitable, Callable
 
 from agents.registry import AGENT_ROLES, GATE_ROLES, role_prompt
 from agents.security import scan_project
-from adapters.agent_cli import AgentCLIAdapter, build_cli, validate_agent_roles
+from adapters.agent_cli import AgentCLIAdapter, KNOWN_CLI_NAMES, build_cli, validate_agent_roles
 from adapters.codex_cli import CLASSIFIER_SCHEMA
 from adapters.command import run_command
 from adapters.deploy import DeployAdapter
@@ -32,7 +32,7 @@ class ExecutionRuntime:
                  event_sink: Callable[[dict[str, Any]], Awaitable[None]] | None = None):
         self.settings = settings
         self.store = store or SQLiteCheckpointer(settings.checkpoint_path)
-        self.clis = clis or {"codex": build_cli("codex", settings)}
+        self.clis = clis or {name: build_cli(name, settings) for name in KNOWN_CLI_NAMES}
         validate_agent_roles(AGENT_ROLES, available_clis=set(self.clis.keys()))
         self.deploy = DeployAdapter(settings)
         self.health = ContextHealthMonitor(settings)
