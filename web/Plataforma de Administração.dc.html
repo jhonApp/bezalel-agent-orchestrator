@@ -298,6 +298,30 @@
               </div>
             </div>
 
+            <div>
+              <div style="font-size:10px; text-transform:uppercase; letter-spacing:0.08em; color:#5A564C; margin-bottom:8px; border-bottom:1px solid #14140F; padding-bottom:4px;">CLI</div>
+              <sc-if value="{{ hasAgentCliDraft }}" hint-placeholder-val="{{ false }}">
+                <div style="display:flex; flex-direction:column; gap:8px;">
+                  <label style="font-size:10.5px; text-transform:uppercase; color:#5A564C;">Principal
+                    <select onChange="{{ onAgentCliChange }}" value="{{ agentCliDraftCli }}" style="width:100%; padding:6px; border:1.5px solid #14140F; background:#F6F4EC; margin-top:2px;">
+                      <sc-for list="{{ agentCliOptions }}" as="o" hint-placeholder-count="2">
+                        <option value="{{ o }}">{{ o }}</option>
+                      </sc-for>
+                    </select>
+                  </label>
+                  <label style="font-size:10.5px; text-transform:uppercase; color:#5A564C;">Reserva (fallback)
+                    <select onChange="{{ onAgentFallbackChange }}" value="{{ agentCliDraftFallback }}" style="width:100%; padding:6px; border:1.5px solid #14140F; background:#F6F4EC; margin-top:2px;">
+                      <option value="">nenhum</option>
+                      <sc-for list="{{ agentCliOptions }}" as="o" hint-placeholder-count="2">
+                        <option value="{{ o }}">{{ o }}</option>
+                      </sc-for>
+                    </select>
+                  </label>
+                  <button onClick="{{ onSaveAgentCli }}" style="align-self:flex-start; padding:7px 14px; background:#14140F; color:#fff; border:none; font-size:10.5px; text-transform:uppercase; letter-spacing:0.04em; cursor:pointer;">Salvar</button>
+                </div>
+              </sc-if>
+            </div>
+
             <sc-if value="{{ selectedAgent.hasLastResult }}" hint-placeholder-val="{{ false }}">
             <div>
               <div style="font-size:10px; text-transform:uppercase; letter-spacing:0.08em; color:#5A564C; margin-bottom:8px; border-bottom:1px solid #14140F; padding-bottom:4px;">Último resultado</div>
@@ -974,6 +998,8 @@ class Component extends DCLogic {
     pipelineExecId: null,
     nodeStatus: {},
     nodeTokens: {},
+    agentCliConfig: null,
+    agentCliDraft: null,
     wakeNotConfigured: false,
   };
 
@@ -1305,6 +1331,47 @@ class Component extends DCLogic {
       });
   }
 
+  openAgentCliConfig(agentKey) {
+    fetch(this.apiUrl("/agents/config"), { headers: this.authHeaders() })
+      .then((r) => r.json())
+      .then((data) => {
+        const roleConfig = data.roles[agentKey] || { cli: "codex", fallback_cli: null };
+        this.setState({
+          agentCliConfig: data,
+          agentCliDraft: { cli: roleConfig.cli, fallback_cli: roleConfig.fallback_cli },
+        });
+      })
+      .catch(() => this.pushLog("Falha ao carregar configuração de CLI para " + agentKey + "."));
+  }
+
+  saveAgentCliConfig() {
+    const role = this.state.selectedAgentKey;
+    const draft = this.state.agentCliDraft;
+    const previous = this.state.agentCliConfig.roles[role];
+    fetch(this.apiUrl("/agents/" + role + "/config"), {
+      method: "PUT",
+      headers: this.authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ cli: draft.cli, fallback_cli: draft.fallback_cli }),
+    })
+      .then((r) => { if (!r.ok) throw new Error("bad status " + r.status); return r.json(); })
+      .then((saved) => {
+        this.setState((s) => ({
+          agentCliConfig: Object.assign({}, s.agentCliConfig, {
+            roles: Object.assign({}, s.agentCliConfig.roles, {
+              [role]: Object.assign({}, s.agentCliConfig.roles[role], { cli: saved.cli, fallback_cli: saved.fallback_cli, overridden: true }),
+            }),
+          }),
+        }));
+        this.pushLog("CLI de " + role + " definida para " + saved.cli + ".");
+        this.showToast("Configuração salva para " + role + ".");
+      })
+      .catch(() => {
+        this.setState({ agentCliDraft: { cli: previous.cli, fallback_cli: previous.fallback_cli } });
+        this.pushLog("Falha ao salvar CLI para " + role + " — revertido.");
+        this.showToast("Falha ao salvar. Revertido ao valor anterior.");
+      });
+  }
+
   toggleLineExpand(lineId) {
     this.setState((s) => ({ expandedLines: Object.assign({}, s.expandedLines, { [lineId]: !s.expandedLines[lineId] }) }));
   }
@@ -1493,7 +1560,7 @@ class Component extends DCLogic {
         onOpenSkillModal: function () { self.openSkillModal(pid); },
         onCloseSkillModal: function () { self.closeSkillModal(); },
         onInstallSkill: function () { self.installSkill(pid); },
-        onSelect: function () { self.setState({ selectedAgentKey: a.key }); self.loadSkills(pid); },
+        onSelect: function () { self.setState({ selectedAgentKey: a.key }); self.loadSkills(pid); self.openAgentCliConfig(a.key); },
       });
     });
   }
@@ -1806,6 +1873,13 @@ class Component extends DCLogic {
       closeAgent: () => this.setState({ selectedAgentKey: null }),
       agentDrawerOpen: !!this.state.selectedAgentKey,
       selectedAgent: selectedAgent,
+      hasAgentCliDraft: !!this.state.agentCliDraft,
+      agentCliOptions: this.state.agentCliConfig ? this.state.agentCliConfig.available : [],
+      agentCliDraftCli: this.state.agentCliDraft ? this.state.agentCliDraft.cli : "",
+      agentCliDraftFallback: this.state.agentCliDraft ? (this.state.agentCliDraft.fallback_cli || "") : "",
+      onAgentCliChange: (e) => this.setState((s) => ({ agentCliDraft: Object.assign({}, s.agentCliDraft, { cli: e.target.value }) })),
+      onAgentFallbackChange: (e) => this.setState((s) => ({ agentCliDraft: Object.assign({}, s.agentCliDraft, { fallback_cli: e.target.value || null }) })),
+      onSaveAgentCli: () => this.saveAgentCliConfig(),
 
       execFilters: execFilters, filteredExecutions: filteredExecutions,
       closeExecution: () => this.setState({ selectedExecutionId: null }),
