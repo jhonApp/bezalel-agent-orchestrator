@@ -471,6 +471,10 @@
                     <div style="font-size:9px; color:#9B9689; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:2px;">Custo estimado</div>
                     <div style="font-size:11px; color:#14140F; font-weight:700;">{{ n.costLabel }}</div>
                   </div>
+                  <div>
+                    <div style="font-size:9px; color:#9B9689; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:2px;">CLI</div>
+                    <div style="font-size:11px; color:#14140F; font-weight:700;">{{ n.cliLabel }}</div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -998,6 +1002,7 @@ class Component extends DCLogic {
     pipelineExecId: null,
     nodeStatus: {},
     nodeTokens: {},
+    nodeCli: {},
     agentCliConfig: null,
     agentCliDraft: null,
     wakeNotConfigured: false,
@@ -1164,11 +1169,13 @@ class Component extends DCLogic {
     this.setState((s) => {
       let nodeStatus = s.nodeStatus;
       let nodeTokens = s.nodeTokens;
+      let nodeCli = s.nodeCli;
       let execId = s.pipelineExecId;
       if (execId !== event.execution_id) {
         execId = event.execution_id;
         nodeStatus = {};
         nodeTokens = {};
+        nodeCli = {};
       }
       if (event.type === "state.updated" && event.node) {
         nodeStatus = Object.assign({}, nodeStatus, { [event.node]: "done" });
@@ -1189,9 +1196,12 @@ class Component extends DCLogic {
             output: prev.output + (event.result.tokens_output || 0),
             cost: prev.cost + (event.result.estimated_cost || 0),
           } });
+          if (event.result.cli_used) {
+            nodeCli = Object.assign({}, nodeCli, { [nodeId]: event.result.cli_used });
+          }
         }
       }
-      return { pipelineExecId: execId, nodeStatus: nodeStatus, nodeTokens: nodeTokens };
+      return { pipelineExecId: execId, nodeStatus: nodeStatus, nodeTokens: nodeTokens, nodeCli: nodeCli };
     });
   }
 
@@ -1619,6 +1629,7 @@ class Component extends DCLogic {
     const COLOR = Component.COLOR;
     const statusMap = this.state.nodeStatus || {};
     const tokensMap = this.state.nodeTokens || {};
+    const cliMap = this.state.nodeCli || {};
     const labelByStatus = { done: "Concluído", running: "Rodando", pending: "Pendente" };
     const colorByStatus = { done: COLOR.success, running: COLOR.teal, pending: COLOR.idle };
     const agentLabels = { frontend: "Frontend", backend: "Backend", python_ai: "Python/IA", contracts: "Contracts", qa: "QA", security: "Security/Cloud", reviewer: "Code Reviewer" };
@@ -1636,6 +1647,7 @@ class Component extends DCLogic {
         isRunning: status === "running",
         tokensLabel: hasAgent ? (tokens.input.toLocaleString("pt-BR") + " in / " + tokens.output.toLocaleString("pt-BR") + " out") : "—",
         costLabel: hasAgent ? ("US$" + tokens.cost.toFixed(4)) : "—",
+        cliLabel: hasAgent ? (cliMap[n.id] || "—") : "—",
       };
     });
   }
