@@ -59,10 +59,13 @@ class ClaudeCodeCLI:
         return command
 
     @staticmethod
-    def _model_for_effort(reasoning_effort: str) -> str:
+    def _model_for_effort(reasoning_effort: str) -> str | None:
         # Claude Code has no reasoning-effort dial the way Codex does — the nearest
-        # equivalent for a judgment-only gate role is a cheaper model tier.
-        return {"low": "haiku"}.get(reasoning_effort, reasoning_effort)
+        # equivalent for a judgment-only gate role is a cheaper model tier. Only map known
+        # aliases: an unrecognized value (e.g. "medium"/"high", valid Codex efforts that
+        # aren't a Claude Code model name) must not be sent as --model verbatim — that
+        # would turn every call into a real 404-style error instead of just being a no-op.
+        return {"low": "haiku"}.get(reasoning_effort)
 
     async def execute(self, prompt: str, workdir: Path, role: str, timeout: int | None = None,
                       cancel_event: asyncio.Event | None = None,
@@ -72,8 +75,9 @@ class ClaudeCodeCLI:
         timeout = timeout or self.settings.agent_timeout_seconds
         started = time.perf_counter()
         command = self._base_command(AGENT_SCHEMA)
-        if reasoning_effort:
-            command += ["--model", self._model_for_effort(reasoning_effort)]
+        model = self._model_for_effort(reasoning_effort) if reasoning_effort else None
+        if model:
+            command += ["--model", model]
         full_prompt = (f"You are the {role} agent in the Bezalel orchestrator.\n\n{prompt}\n\n"
                        "Return only a JSON object matching the supplied schema in your final "
                        "response. Never include secrets or private model reasoning.\n")
@@ -163,8 +167,9 @@ class ClaudeCodeCLI:
     async def execute_json(self, prompt: str, workdir: Path, schema: dict[str, Any], label: str,
                            timeout: int = 120, reasoning_effort: str | None = None) -> dict[str, Any] | None:
         command = self._base_command(schema)
-        if reasoning_effort:
-            command += ["--model", self._model_for_effort(reasoning_effort)]
+        model = self._model_for_effort(reasoning_effort) if reasoning_effort else None
+        if model:
+            command += ["--model", model]
         full_prompt = (f"You are the {label} in the Bezalel orchestrator.\n\n{prompt}\n\n"
                        "Return only a JSON object matching the supplied schema in your final response.\n")
         try:

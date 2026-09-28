@@ -39,6 +39,61 @@ def test_resolve_claude_code_command_defaults_to_bare_claude():
     assert Path(resolved[-1]).name.lower() in {"claude", "claude.cmd", "claude.exe"}
 
 
+def test_model_for_effort_maps_the_low_alias_to_haiku():
+    assert ClaudeCodeCLI._model_for_effort("low") == "haiku"
+
+
+def test_model_for_effort_returns_none_for_an_unrecognized_effort():
+    """"medium"/"high" are valid Codex reasoning efforts but not Claude Code model names —
+    sending them as --model verbatim would turn every call into a real 404-style error."""
+    assert ClaudeCodeCLI._model_for_effort("medium") is None
+    assert ClaudeCodeCLI._model_for_effort("high") is None
+
+
+FAKE_CLAUDE_ECHO_ARGV = r'''
+import json
+import sys
+print(json.dumps({
+    "type": "result", "subtype": "success", "is_error": False,
+    "result": "ok",
+    "total_cost_usd": 0.01,
+    "usage": {"input_tokens": 1, "output_tokens": 1},
+    "received_argv": sys.argv[1:],
+    "structured_output": {
+        "status": "completed", "summary": "ok", "files_changed": [], "tests": [],
+        "contracts_changed": [], "errors": [], "next_action": None,
+        "tokens_input": 0, "tokens_output": 0, "quality": None,
+    },
+}))
+sys.exit(0)
+'''
+
+
+@pytest.mark.asyncio
+async def test_execute_sends_no_model_flag_for_an_unrecognized_reasoning_effort(tmp_path: Path):
+    """raw_response always holds the fake script's full raw stdout — including the
+    received_argv field it echoes back — so this checks the actual argv Claude Code would
+    have received, not just that the call succeeded."""
+    command = write_script(tmp_path, "fake_claude_echo_argv.py", FAKE_CLAUDE_ECHO_ARGV)
+    settings = settings_for(tmp_path, command)
+
+    result = await ClaudeCodeCLI(settings).execute("do it", tmp_path, "frontend", reasoning_effort="medium")
+
+    assert result.status == "completed"
+    assert "--model" not in result.raw_response
+
+
+@pytest.mark.asyncio
+async def test_execute_sends_the_mapped_model_flag_for_a_recognized_reasoning_effort(tmp_path: Path):
+    command = write_script(tmp_path, "fake_claude_echo_argv2.py", FAKE_CLAUDE_ECHO_ARGV)
+    settings = settings_for(tmp_path, command)
+
+    result = await ClaudeCodeCLI(settings).execute("do it", tmp_path, "frontend", reasoning_effort="low")
+
+    assert result.status == "completed"
+    assert '"--model", "haiku"' in result.raw_response
+
+
 FAKE_CLAUDE_SUCCESS = r'''
 import json
 import sys
