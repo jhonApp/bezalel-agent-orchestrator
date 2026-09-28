@@ -148,6 +148,11 @@ class ExecutionRequest(BaseModel):
     target_projects: list[str] | None = None
 
 
+class AgentCLIConfigRequest(BaseModel):
+    cli: str
+    fallback_cli: str | None = None
+
+
 class ExecutionStateModel(BaseModel):
     execution_id: str
     project_id: str

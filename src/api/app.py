@@ -33,7 +33,7 @@ from orchestrator.quality import quality_by_execution, quality_by_version
 from agents.registry import AGENT_ROLES
 from adapters.skills import install_skill, list_skills, remove_skill
 from observability.live_events import LiveEventBroker
-from schemas.models import ExecutionRequest
+from schemas.models import AgentCLIConfigRequest, ExecutionRequest
 
 
 class SkillInstallRequest(BaseModel):
@@ -440,5 +440,34 @@ source.addEventListener("orchestration", (message) => {
     @app.delete("/projects/{project_id}/skills/{skill}")
     async def delete_project_skill(project_id: str, skill: str) -> dict[str, Any]:
         return await remove_skill(project_path(project_id), skill)
+
+    @app.get("/agents/config")
+    async def get_agents_config() -> dict[str, Any]:
+        runtime = app.state.graph.runtime
+        overrides = runtime.store.get_role_cli_overrides()
+        available = sorted(runtime.clis.keys())
+        roles = {}
+        for role, defaults in AGENT_ROLES.items():
+            override = overrides.get(role, {})
+            roles[role] = {
+                "default_cli": defaults.get("cli", "codex"),
+                "default_fallback_cli": defaults.get("fallback_cli"),
+                "cli": override.get("cli", defaults.get("cli", "codex")),
+                "fallback_cli": override.get("fallback_cli", defaults.get("fallback_cli")),
+                "overridden": role in overrides,
+            }
+        return {"available": available, "roles": roles}
+
+    @app.put("/agents/{role}/config")
+    async def put_agent_config(role: str, request: AgentCLIConfigRequest) -> dict[str, Any]:
+        if role not in AGENT_ROLES:
+            raise HTTPException(status_code=404, detail=f"unknown role '{role}'")
+        runtime = app.state.graph.runtime
+        if request.cli not in runtime.clis:
+            raise HTTPException(status_code=400, detail=f"unknown cli '{request.cli}' — available: {sorted(runtime.clis.keys())}")
+        if request.fallback_cli is not None and request.fallback_cli not in runtime.clis:
+            raise HTTPException(status_code=400, detail=f"unknown fallback_cli '{request.fallback_cli}' — available: {sorted(runtime.clis.keys())}")
+        runtime.store.set_role_cli_override(role, request.cli, request.fallback_cli)
+        return {"role": role, "cli": request.cli, "fallback_cli": request.fallback_cli}
 
     return app
