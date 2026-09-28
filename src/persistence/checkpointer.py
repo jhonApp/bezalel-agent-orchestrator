@@ -45,6 +45,9 @@ class SQLiteCheckpointer:
               id INTEGER PRIMARY KEY AUTOINCREMENT, execution_id TEXT NOT NULL,
               agent TEXT NOT NULL, task_id TEXT, result_json TEXT NOT NULL, created_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS role_cli_overrides (
+              role TEXT PRIMARY KEY, cli TEXT NOT NULL, fallback_cli TEXT, updated_at TEXT NOT NULL
+            );
             """)
 
     def save(self, execution_id: str, state: dict[str, Any], node: str) -> None:
@@ -177,3 +180,17 @@ class SQLiteCheckpointer:
             item["estimated_cost"] += float(result.get("estimated_cost") or 0)
             item["duration_seconds"] += float(result.get("duration_seconds") or 0)
         return list(metrics.values())
+
+    def get_role_cli_overrides(self) -> dict[str, dict[str, Any]]:
+        with self._connect() as db:
+            rows = db.execute("SELECT role, cli, fallback_cli FROM role_cli_overrides").fetchall()
+        return {row["role"]: {"cli": row["cli"], "fallback_cli": row["fallback_cli"]} for row in rows}
+
+    def set_role_cli_override(self, role: str, cli: str, fallback_cli: str | None) -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        with self._connect() as db:
+            db.execute(
+                "INSERT INTO role_cli_overrides (role, cli, fallback_cli, updated_at) VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(role) DO UPDATE SET cli=excluded.cli, fallback_cli=excluded.fallback_cli, updated_at=excluded.updated_at",
+                (role, cli, fallback_cli, now),
+            )
