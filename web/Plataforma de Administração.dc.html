@@ -328,6 +328,7 @@
               <div style="border:1.5px solid {{ selectedAgent.lastResultColor }}; background:#F6F4EC; padding:12px;">
                 <span style="font-size:10px; font-weight:800; text-transform:uppercase; letter-spacing:0.04em; color:{{ selectedAgent.lastResultColor }};">{{ selectedAgent.lastResultStatusLabel }}</span>
                 <div style="font-size:12px; margin-top:6px;">{{ selectedAgent.lastResultSummary }}</div>
+                <div style="font-size:10.5px; color:#5A564C; margin-top:8px;">CLI: {{ selectedAgent.lastResultCliUsed }}</div>
                 <sc-if value="{{ selectedAgent.hasLastResultFiles }}" hint-placeholder-val="{{ false }}">
                   <div style="font-size:10.5px; color:#5A564C; margin-top:8px; font-family:'SFMono-Regular',Consolas,monospace;">Arquivos: {{ selectedAgent.lastResultFiles }}</div>
                 </sc-if>
@@ -1119,6 +1120,7 @@ class Component extends DCLogic {
             lastResult: {
               status: event.status, summary: event.result.summary || "",
               filesChanged: event.result.files_changed || [], errors: event.result.errors || [],
+              cliUsed: event.result.cli_used || "",
             },
           }) }) };
         });
@@ -1367,6 +1369,7 @@ class Component extends DCLogic {
     })
       .then((r) => { if (!r.ok) throw new Error("bad status " + r.status); return r.json(); })
       .then((saved) => {
+        if (this.state.selectedAgentKey !== role) return;
         this.setState((s) => ({
           agentCliConfig: Object.assign({}, s.agentCliConfig, {
             roles: Object.assign({}, s.agentCliConfig.roles, {
@@ -1379,6 +1382,7 @@ class Component extends DCLogic {
         this.showToast("Configuração salva para " + role + ".");
       })
       .catch(() => {
+        if (this.state.selectedAgentKey !== role) return;
         this.setState({ agentCliDraft: { cli: previous.cli, fallback_cli: previous.fallback_cli } });
         this.pushLog("Falha ao salvar CLI para " + role + " — revertido.");
         this.showToast("Falha ao salvar. Revertido ao valor anterior.");
@@ -1557,6 +1561,7 @@ class Component extends DCLogic {
         hasLastResultFiles: !!(lastResult && lastResult.filesChanged.length),
         lastResultErrors: lastResult && lastResult.errors.length ? lastResult.errors.join("; ") : "",
         hasLastResultErrors: !!(lastResult && lastResult.errors.length),
+        lastResultCliUsed: (lastResult && lastResult.cliUsed) || "—",
         projectId: pid,
         skillsList: (skillsData && skillsData.skills ? skillsData.skills : []).map(function (s) {
           return { name: s.name, source: s.source || "", onRemove: function () { self.confirmRemoveSkill(pid, s.name); } };
