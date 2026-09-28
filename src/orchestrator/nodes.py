@@ -34,6 +34,12 @@ class ExecutionRuntime:
         self.store = store or SQLiteCheckpointer(settings.checkpoint_path)
         self.clis = clis or {name: build_cli(name, settings) for name in KNOWN_CLI_NAMES}
         validate_agent_roles(AGENT_ROLES, available_clis=set(self.clis.keys()))
+        for override_role, override in self.store.get_role_cli_overrides().items():
+            if override.get("cli") not in self.clis:
+                raise ValueError(
+                    f"persisted override for role '{override_role}' declares cli='{override.get('cli')}', "
+                    f"which is not in the configured clis {sorted(self.clis.keys())}"
+                )
         self.deploy = DeployAdapter(settings)
         self.health = ContextHealthMonitor(settings)
         self.tracing = LangSmithObserver(settings)
@@ -42,6 +48,16 @@ class ExecutionRuntime:
 
     def cancel_event(self, execution_id: str) -> asyncio.Event:
         return self.cancel_events.setdefault(execution_id, asyncio.Event())
+
+    def _effective_role_config(self, role: str) -> dict[str, Any]:
+        config = dict(AGENT_ROLES.get(role, {}))
+        override = self.store.get_role_cli_overrides().get(role)
+        if override:
+            if override.get("cli"):
+                config["cli"] = override["cli"]
+            if "fallback_cli" in override:
+                config["fallback_cli"] = override["fallback_cli"]
+        return config
 
     async def persist(self, state: dict[str, Any], node: str, event: str | None = None, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         state = dict(state)
@@ -115,7 +131,7 @@ class ExecutionRuntime:
                 "agent": role, "task_id": task["task_id"], **event,
             })
 
-        role_config = AGENT_ROLES.get(role, {})
+        role_config = self._effective_role_config(role)
         cli = self.clis[role_config.get("cli", "codex")]
         fallback_cli_name = role_config.get("fallback_cli")
         reasoning_effort = self.settings.codex_reasoning_effort_gates if role in GATE_ROLES else None
@@ -233,7 +249,7 @@ class ExecutionRuntime:
         # iterates every role, this one included) — honoring it here too, instead of pinning
         # to "codex" unconditionally, is what makes that validation mean something: a role's
         # cli must never be checked at startup and then silently ignored at dispatch.
-        classifier_cli = self.clis[AGENT_ROLES.get("classifier", {}).get("cli", "codex")]
+        classifier_cli = self.clis[self._effective_role_config("classifier").get("cli", "codex")]
         result = await classifier_cli.execute_json(prompt, self.settings.workspace_root, CLASSIFIER_SCHEMA, "Classifier",
                                                     reasoning_effort=self.settings.codex_reasoning_effort_gates)
         if result is None:
