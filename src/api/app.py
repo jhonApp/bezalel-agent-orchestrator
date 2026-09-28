@@ -294,7 +294,7 @@ def create_app(settings: Settings | None = None) -> Any:
                 tasks.append({
                     "task_id": task.get("task_id"), "agent": task["agent"], "status": task.get("status", "pending"),
                     "summary": result.get("summary", ""), "files_changed": result.get("files_changed", []),
-                    "errors": result.get("errors", []),
+                    "errors": result.get("errors", []), "cli_used": result.get("cli_used"),
                 })
             execution_items.append({
                 **execution,

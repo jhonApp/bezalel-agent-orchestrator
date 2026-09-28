@@ -115,11 +115,37 @@ async def test_dashboard_data_includes_trimmed_per_agent_task_summaries(tmp_path
     assert tasks["T001"] == {
         "task_id": "T001", "agent": "frontend", "status": "completed",
         "summary": "Added the Button component", "files_changed": ["src/Button.tsx"], "errors": [],
+        "cli_used": None,
     }
     assert tasks["T012"]["status"] == "blocked"
     assert tasks["T012"]["errors"] == ["AWS access key identifier"]
     # The large raw Codex transcript must not ride along on a 2-second dashboard poll.
     assert "raw_response" not in tasks["T001"]
+
+
+@pytest.mark.asyncio
+async def test_dashboard_data_surfaces_which_cli_served_a_task(tmp_path: Path) -> None:
+    settings = settings_for(tmp_path)
+    state = await _seed_completed_execution(settings, "exec-completed-cli")
+    state["plan"][0]["result"]["cli_used"] = "claude_code"
+    SQLiteCheckpointer(settings.checkpoint_path).save("exec-completed-cli", state, "generate_final_report")
+    settings.langgraph_checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+    async with AsyncSqliteSaver.from_conn_string(str(settings.langgraph_checkpoint_path)) as saver:
+        await saver.setup()
+        checkpoint = empty_checkpoint()
+        checkpoint["channel_values"] = state
+        await saver.aput(
+            {"configurable": {"thread_id": "exec-completed-cli", "checkpoint_ns": ""}}, checkpoint,
+            {"source": "input", "step": -1, "writes": {}, "parents": {}}, {},
+        )
+
+    async with running_api(settings) as base_url:
+        async with httpx.AsyncClient(base_url=base_url, timeout=10.0) as client:
+            response = await client.get("/dashboard-data")
+
+    item = next(i for i in response.json()["items"] if i["execution_id"] == "exec-completed-cli")
+    tasks = {t["task_id"]: t for t in item["tasks"]}
+    assert tasks["T001"]["cli_used"] == "claude_code"
 
 
 @pytest.mark.asyncio
