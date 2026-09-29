@@ -382,6 +382,16 @@ source.addEventListener("orchestration", (message) => {
     async def list_executions(limit: int = 100) -> list[dict[str, Any]]:
         return settings_store().list(limit)
 
+    @app.get("/executions/resumable")
+    async def list_resumable_executions(project_id: str | None = None, limit: int = 20) -> list[dict[str, Any]]:
+        """Executions that have not reached "completed" — for a caller deciding whether a
+        "continue"/"resume" request should hit POST /executions/{id}/resume instead of
+        creating a brand new execution that redoes every already-finished step from scratch.
+        Registered before /executions/{execution_id} so that path param does not swallow
+        this literal route.
+        """
+        return settings_store().list_resumable(project_id, limit)
+
     @app.get("/executions/{execution_id}")
     async def get_execution(execution_id: str) -> dict[str, Any]:
         try:

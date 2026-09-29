@@ -10,7 +10,8 @@ import uvicorn
 
 from api.app import create_app
 from orchestrator.config import Settings
-from orchestrator.mcp_bridge import check_execution, resume_execution, run_feature
+from orchestrator.mcp_bridge import check_execution, find_resumable_executions, resume_execution, run_feature
+from persistence.checkpointer import SQLiteCheckpointer
 
 
 def settings_for(tmp_path: Path) -> Settings:
@@ -112,6 +113,50 @@ async def test_resume_execution_reports_unknown_id_as_error(tmp_path: Path) -> N
 async def test_resume_execution_reports_unreachable_api_clearly() -> None:
     port = await _free_port()
     result = await resume_execution("some-id", base_url=f"http://127.0.0.1:{port}")
+
+    assert "error" in result
+    assert "unreachable" in result["error"]
+
+
+def _seed(store: SQLiteCheckpointer, execution_id: str, project_id: str, status: str, updated_at: str) -> None:
+    store.save(execution_id, {
+        "execution_id": execution_id, "project_id": project_id, "feature_request": "x",
+        "status": status, "updated_at": updated_at,
+    }, "some_node")
+
+
+@pytest.mark.asyncio
+async def test_find_resumable_executions_returns_only_the_unfinished_ones(tmp_path: Path) -> None:
+    settings = settings_for(tmp_path)
+    store = SQLiteCheckpointer(settings.checkpoint_path)
+    _seed(store, "e-done", "bezalel", "completed", "2026-09-29T00:00:00+00:00")
+    _seed(store, "e-stuck", "bezalel", "failed", "2026-09-29T00:01:00+00:00")
+
+    async with running_api(tmp_path) as base_url:
+        result = await find_resumable_executions(base_url=base_url)
+
+    ids = [row["execution_id"] for row in result["executions"]]
+    assert ids == ["e-stuck"]
+
+
+@pytest.mark.asyncio
+async def test_find_resumable_executions_filters_by_project_id(tmp_path: Path) -> None:
+    settings = settings_for(tmp_path)
+    store = SQLiteCheckpointer(settings.checkpoint_path)
+    _seed(store, "e-bezalel", "bezalel", "failed", "2026-09-29T00:00:00+00:00")
+    _seed(store, "e-other", "other-project", "failed", "2026-09-29T00:01:00+00:00")
+
+    async with running_api(tmp_path) as base_url:
+        result = await find_resumable_executions(project_id="bezalel", base_url=base_url)
+
+    ids = [row["execution_id"] for row in result["executions"]]
+    assert ids == ["e-bezalel"]
+
+
+@pytest.mark.asyncio
+async def test_find_resumable_executions_reports_unreachable_api_clearly() -> None:
+    port = await _free_port()
+    result = await find_resumable_executions(base_url=f"http://127.0.0.1:{port}")
 
     assert "error" in result
     assert "unreachable" in result["error"]

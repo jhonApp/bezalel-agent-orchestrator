@@ -57,6 +57,25 @@ async def check_execution(execution_id: str, base_url: str | None = None) -> dic
     return response.json()
 
 
+async def find_resumable_executions(project_id: str | None = None, base_url: str | None = None) -> dict[str, Any]:
+    """List orchestrator executions that have not reached "completed" — the lookup step
+    that should happen before deciding whether a "continue"/"resume" request should call
+    `resume_execution` on an existing id or `run_feature` to start a brand new one. Without
+    this, describing "continue execution X" in a fresh feature request has no way to
+    recover a forgotten execution_id, so it silently falls back to a full new run.
+    """
+    url = _base_url(base_url)
+    params = {"project_id": project_id} if project_id else {}
+    try:
+        async with httpx.AsyncClient(base_url=url, timeout=10.0) as client:
+            response = await client.get("/executions/resumable", params=params)
+    except httpx.ConnectError:
+        return {"error": f"Orchestrator API unreachable at {url}. Start it with `bezalel-orchestrator api`."}
+    if response.status_code >= 400:
+        return {"error": f"Orchestrator API returned {response.status_code}: {response.text[:500]}"}
+    return {"executions": response.json()}
+
+
 async def resume_execution(execution_id: str, base_url: str | None = None) -> dict[str, Any]:
     """Resume a previously dispatched orchestrator execution from its saved state.
 
@@ -103,6 +122,14 @@ async def run_orchestrator_feature(feature_request: str, project_id: str = "beza
     immediately in the orchestrator's Manage Agents panel and its `/events/view` page — this
     call itself just returns the execution id to track, it does not wait for the run to finish.
     Use `check_orchestrator_execution` to poll that id for a final result.
+
+    If the user is asking to continue, resume, or pick back up EARLIER work rather than
+    describing a fresh request, do not call this — the execution_id from that earlier work
+    has likely been lost by now. Call `find_resumable_orchestrator_executions` first to
+    recover it, then `resume_orchestrator_execution` on the id it returns. Calling this tool
+    for a "continue" request creates a brand new execution and redoes every already-finished
+    step from scratch, including redispatching a domain agent that already completed —
+    exactly the mistake this note exists to prevent.
     """
     return await run_feature(feature_request, project_id, dry_run, analysis_only)
 
@@ -111,6 +138,21 @@ async def run_orchestrator_feature(feature_request: str, project_id: str = "beza
 async def check_orchestrator_execution(execution_id: str) -> dict[str, Any]:
     """Check the current status of a previously dispatched orchestrator execution."""
     return await check_execution(execution_id)
+
+
+@mcp.tool()
+async def find_resumable_orchestrator_executions(project_id: str | None = None) -> dict[str, Any]:
+    """Use this BEFORE deciding whether to call `run_orchestrator_feature` or
+    `resume_orchestrator_execution`, whenever the user asks to continue, resume, or pick
+    back up earlier orchestrator work without giving you its exact execution_id.
+
+    Returns every execution that has not reached "completed" (running, failed, cancelled,
+    or still mid-flight), most recently updated first, optionally filtered to one
+    `project_id`. Pick the execution that matches what the user described, then call
+    `resume_orchestrator_execution` with its id — never `run_orchestrator_feature`, which
+    would start a brand new execution and redo every already-finished step from scratch.
+    """
+    return await find_resumable_executions(project_id)
 
 
 @mcp.tool()

@@ -68,6 +68,26 @@ class SQLiteCheckpointer:
             rows = db.execute("SELECT * FROM executions ORDER BY updated_at DESC LIMIT ?", (limit,)).fetchall()
         return [dict(row) for row in rows]
 
+    def list_resumable(self, project_id: str | None = None, limit: int = 20) -> list[dict[str, Any]]:
+        """Executions that have not reached "completed" — a candidate for POST
+        /executions/{id}/resume instead of a caller (human or agent) describing "continue
+        execution X" in a fresh feature request, which always creates a brand new execution
+        and redoes every already-finished step from scratch.
+        """
+        with self._connect() as db:
+            if project_id is not None:
+                rows = db.execute(
+                    "SELECT * FROM executions WHERE status != 'completed' AND project_id = ? "
+                    "ORDER BY updated_at DESC LIMIT ?",
+                    (project_id, limit),
+                ).fetchall()
+            else:
+                rows = db.execute(
+                    "SELECT * FROM executions WHERE status != 'completed' ORDER BY updated_at DESC LIMIT ?",
+                    (limit,),
+                ).fetchall()
+        return [dict(row) for row in rows]
+
     def event(self, execution_id: str, event_type: str, payload: dict[str, Any], created_at: str) -> None:
         with self._connect() as db:
             db.execute("INSERT INTO events(execution_id,event_type,payload_json,created_at) VALUES(?,?,?,?)",
