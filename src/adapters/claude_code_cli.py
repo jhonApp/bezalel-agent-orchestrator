@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 from adapters.codex_cli import AGENT_SCHEMA, CodexCLI
-from adapters.command import which
+from adapters.command import kill_process_tree, which
 from orchestrator.config import Settings
 from schemas.models import AgentResult
 
@@ -93,12 +93,12 @@ class ClaudeCodeCLI:
         deadline = time.monotonic() + timeout
         while not communicate_task.done():
             if cancel_event and cancel_event.is_set():
-                process.kill()
+                await kill_process_tree(process)
                 await communicate_task
                 return AgentResult(agent=role, status="blocked", summary="cancelled", errors=["execution cancelled"],
                                    duration_seconds=time.perf_counter() - started)
             if time.monotonic() >= deadline:
-                process.kill()
+                await kill_process_tree(process)
                 await communicate_task
                 return AgentResult(agent=role, status="failed", summary="Claude Code timeout", errors=["agent timeout"],
                                    duration_seconds=time.perf_counter() - started)
@@ -182,7 +182,7 @@ class ClaudeCodeCLI:
         try:
             stdout, _stderr = await asyncio.wait_for(process.communicate(full_prompt.encode("utf-8")), timeout=timeout)
         except asyncio.TimeoutError:
-            process.kill()
+            await kill_process_tree(process)
             await process.wait()
             return None
         try:

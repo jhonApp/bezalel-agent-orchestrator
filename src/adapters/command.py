@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 import shutil
+import signal
 import subprocess
 import time
 from pathlib import Path
@@ -54,3 +55,30 @@ async def run_command(command: list[str], cwd: Path, timeout: int = 900, env: di
 
 def which(command: str) -> str | None:
     return shutil.which(command)
+
+
+async def kill_process_tree(process: asyncio.subprocess.Process) -> None:
+    """Terminate ``process`` and everything it spawned, not just the one PID asyncio
+    tracks. On Windows, Codex/Claude Code CLI run through a ``.cmd`` shim that the OS
+    transparently re-launches via ``cmd.exe``, which then execs the real ``node.exe``
+    process (itself capable of spawning further MCP-server children) — none of which
+    ``process.kill()`` touches, since ``TerminateProcess`` only targets the single PID
+    given to it. A surviving grandchild keeps the inherited stdout/stderr pipe open, so
+    whatever is waiting for EOF on those pipes never sees it, well past any deadline
+    this was meant to enforce. ``taskkill /T`` walks the whole tree; on POSIX, killing
+    the process group reaches anything that didn't detach into its own session.
+    """
+    if os.name == "nt":
+        try:
+            killer = await asyncio.create_subprocess_exec(
+                "taskkill", "/PID", str(process.pid), "/T", "/F",
+                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+            )
+            await killer.wait()
+        except OSError:
+            process.kill()
+    else:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError, OSError):
+            process.kill()

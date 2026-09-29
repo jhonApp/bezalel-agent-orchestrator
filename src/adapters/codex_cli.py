@@ -14,7 +14,7 @@ from orchestrator.config import Settings
 from observability.langsmith import LangSmithObserver
 from schemas.models import AgentResult, CommandResult
 
-from .command import run_command, which
+from .command import kill_process_tree, run_command, which
 
 
 AGENT_SCHEMA = {
@@ -161,12 +161,12 @@ class CodexCLI:
                     deadline = time.monotonic() + timeout
                     while not combined.done():
                         if cancel_event and cancel_event.is_set():
-                            process.kill()
+                            await kill_process_tree(process)
                             await combined
                             return AgentResult(agent=role, status="blocked", summary="cancelled", errors=["execution cancelled"],
                                                duration_seconds=time.perf_counter() - started)
                         if time.monotonic() >= deadline:
-                            process.kill()
+                            await kill_process_tree(process)
                             await combined
                             return AgentResult(agent=role, status="failed", summary="Codex timeout", errors=["agent timeout"],
                                                duration_seconds=time.perf_counter() - started)
@@ -221,7 +221,7 @@ class CodexCLI:
                 try:
                     await asyncio.wait_for(process.communicate(full_prompt.encode("utf-8")), timeout=timeout)
                 except asyncio.TimeoutError:
-                    process.kill()
+                    await kill_process_tree(process)
                     await process.wait()
                     return None
             except OSError:
