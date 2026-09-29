@@ -166,6 +166,30 @@ async def test_classify_projects_node_calls_the_classifier_when_no_override_is_g
 
 
 @pytest.mark.asyncio
+async def test_classify_projects_node_reuses_a_prior_classification_instead_of_reclassifying():
+    """A resumed execution already carries relevant_projects/relevant_projects_source from
+    its previous pass through this node — re-classifying on every resume wastes a real
+    Codex call (small but non-zero cost) for a result that has already been decided for
+    this same feature_request."""
+    runtime = StubClassifyRuntime(relevant=["backend"])
+    state = {
+        "feature_request": "fix the endpoint", "target_projects": None,
+        "detected_projects": [
+            {"project_id": "frontend", "exists": True},
+            {"project_id": "backend", "exists": True},
+        ],
+        "relevant_projects": ["frontend"], "relevant_projects_source": "classifier",
+    }
+
+    result = await nodes.classify_projects(runtime, state)
+
+    assert runtime.classify_calls == [], "must not re-invoke the classifier when already classified"
+    assert result["relevant_projects"] == ["frontend"]
+    assert result["relevant_projects_source"] == "classifier"
+    assert runtime.persist_calls[0][3]["reused"] is True
+
+
+@pytest.mark.asyncio
 async def test_classify_projects_node_filters_the_override_by_existing_projects():
     runtime = StubClassifyRuntime(relevant=[])
     state = {

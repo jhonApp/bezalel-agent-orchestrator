@@ -287,17 +287,28 @@ async def discover_projects_node(runtime: ExecutionRuntime, state: dict[str, Any
 
 
 async def classify_projects(runtime: ExecutionRuntime, state: dict[str, Any]) -> dict[str, Any]:
-    existing = {p["project_id"] for p in state.get("detected_projects", []) if p.get("exists")}
-    override = state.get("target_projects")
-    if override is not None:
-        relevant = [p for p in override if p in existing]
-        source = "override"
+    # A resumed execution walks this node again with relevant_projects/relevant_projects_source
+    # already decided from its previous pass — re-classifying would spend a real Codex call on
+    # a question already answered for this same feature_request. relevant_projects_source is
+    # only ever set by this node (never part of initial_state), so its presence reliably means
+    # "already classified" — including the legitimate case where the answer was an empty list.
+    already_classified = state.get("relevant_projects_source") is not None
+    if already_classified:
+        relevant = state.get("relevant_projects", [])
+        source = state["relevant_projects_source"]
     else:
-        relevant, source = await runtime.classify_relevant_projects(state["feature_request"], existing)
+        existing = {p["project_id"] for p in state.get("detected_projects", []) if p.get("exists")}
+        override = state.get("target_projects")
+        if override is not None:
+            relevant = [p for p in override if p in existing]
+            source = "override"
+        else:
+            relevant, source = await runtime.classify_relevant_projects(state["feature_request"], existing)
     state["relevant_projects"] = relevant
     state["relevant_projects_source"] = source
     state["next_action"] = "create_plan"
-    return await runtime.persist(state, "classify_projects", "projects.classified", {"relevant": relevant, "source": source})
+    return await runtime.persist(state, "classify_projects", "projects.classified",
+                                 {"relevant": relevant, "source": source, "reused": already_classified})
 
 
 def _reuse_if_completed(existing_by_id: dict[str, dict[str, Any]], task_id: str, role: str, project_id: str) -> dict[str, Any] | None:
@@ -590,6 +601,21 @@ async def security_review(runtime: ExecutionRuntime, state: dict[str, Any]) -> d
 
 async def code_review(runtime: ExecutionRuntime, state: dict[str, Any]) -> dict[str, Any]:
     task = next((t for t in state.get("plan", []) if t.get("agent") == "reviewer"), None)
+    gates_ok, gate_reasons = gates_pass(state)
+    if task and not gates_ok:
+        # A resumed execution walks the whole graph again on every attempt — if an earlier
+        # gate (a coding task failure/rate-limit, a blocking contract finding, a failed test)
+        # already dooms commit_changes' gates_pass() check at the end of this same pass,
+        # dispatching reviewer here would spend a real Codex call reviewing a diff that
+        # cannot ship anyway. Mark it skipped, not completed, so create_plan recreates it
+        # fresh on the next resume and this check runs again once the real blocker clears.
+        task["status"] = "skipped"
+        result = ReviewResult(status="not_run", summary="Code review skipped: " + "; ".join(gate_reasons))
+        task["result"] = {"status": "skipped", "summary": result.summary}
+        state["review_results"] = [result.model_dump(mode="json")]
+        state["next_action"] = "commit_changes"
+        return await runtime.persist(state, "code_review", "review.completed",
+                                     {"status": result.status, "skipped_reasons": gate_reasons})
     result = ReviewResult(status="not_run", summary="review skipped in dry-run")
     if task and not state.get("approvals", {}).get("dry_run"):
         task["status"] = "running"

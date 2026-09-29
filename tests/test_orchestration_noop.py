@@ -189,6 +189,51 @@ async def test_code_review_approves_without_agent_when_no_files_changed(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_code_review_skips_when_an_earlier_task_already_failed(monkeypatch):
+    """A resumed execution walks the whole graph again — if backend already failed (e.g. a
+    timeout) before code_review is reached, gates_pass() will block commit/merge at the end
+    regardless of what reviewer says. Dispatching reviewer here would spend a real Codex call
+    reviewing a diff that cannot ship anyway; it must be skipped, not run."""
+    async def fail_if_called(runtime, state):
+        raise AssertionError("_changed_project_ids must not be called when an earlier gate already blocks")
+
+    monkeypatch.setattr(nodes, "_changed_project_ids", fail_if_called)
+    state = {
+        "plan": [
+            {"task_id": "T002", "agent": "backend", "status": "failed"},
+            {"task_id": "T013", "agent": "reviewer", "status": "pending", "description": "review the diff"},
+        ],
+        "approvals": {},
+    }
+
+    result = await nodes.code_review(NoAgentRuntime(), state)
+
+    reviewer_task = next(t for t in result["plan"] if t["agent"] == "reviewer")
+    assert reviewer_task["status"] == "skipped"
+    assert result["review_results"][0]["status"] == "not_run"
+    assert "failed" in result["review_results"][0]["summary"]
+
+
+@pytest.mark.asyncio
+async def test_code_review_skips_when_contracts_has_a_blocking_finding(monkeypatch):
+    async def fail_if_called(runtime, state):
+        raise AssertionError("_changed_project_ids must not be called when contracts already blocks")
+
+    monkeypatch.setattr(nodes, "_changed_project_ids", fail_if_called)
+    state = {
+        "plan": [{"task_id": "T013", "agent": "reviewer", "status": "pending", "description": "review the diff"}],
+        "contracts": [{"resource": "api", "severity": "blocking", "message": "breaking change"}],
+        "approvals": {},
+    }
+
+    result = await nodes.code_review(NoAgentRuntime(), state)
+
+    task = result["plan"][0]
+    assert task["status"] == "skipped"
+    assert result["review_results"][0]["status"] == "not_run"
+
+
+@pytest.mark.asyncio
 async def test_run_contract_validation_validates_every_changed_project_not_just_the_first(monkeypatch):
     async def two_changed_projects(runtime, state):
         return ["frontend", "backend"]
