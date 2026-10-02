@@ -709,6 +709,96 @@ async def test_security_review_announces_agent_lifecycle_and_reports_blocking_fi
 
 
 @pytest.mark.asyncio
+async def test_run_tests_skips_projects_not_relevant_to_this_feature(monkeypatch) -> None:
+    """A project the classifier didn't mark relevant must never gate completion on its own
+    independent, possibly pre-existing, broken test state — dispatch_agents/create_plan
+    already respect relevant_projects; run_tests tested every detected project regardless."""
+    from schemas.models import CommandResult
+
+    async def fake_changed_paths(runtime, state, project_id):
+        return ["some/file"]  # non-empty for every project — proves relevance gates it, not this
+
+    async def fake_run_command(command, cwd, timeout=900, env=None, direct_cmd_exec=False):
+        if "pytest" in command:
+            raise AssertionError(f"run_command must not run tests for an irrelevant project: {command}")
+        return CommandResult(command=command, cwd=str(cwd), returncode=0, stdout="ok", stderr="", duration_seconds=0.1)
+
+    monkeypatch.setattr(nodes, "_changed_paths", fake_changed_paths)
+    monkeypatch.setattr(nodes, "run_command", fake_run_command)
+
+    class RecordingRuntime:
+        settings = type("S", (), {"agent_timeout_seconds": 30})()
+
+        def workdir_for(self, state, project_id):
+            return Path(".")
+
+        async def persist(self, state, node, event=None, payload=None):
+            return state
+
+        async def announce_agent_started(self, state, task):
+            pass
+
+        async def announce_agent_finished(self, state, task):
+            pass
+
+    state = {
+        "detected_projects": [
+            {"project_id": "frontend", "exists": True, "package_manager": "npm", "commands": {"test": "x"}},
+            {"project_id": "python", "exists": True},
+        ],
+        "relevant_projects": ["frontend"],
+        "approvals": {},
+        "plan": [{"task_id": "T011", "agent": "qa", "status": "pending", "description": "run the relevant tests"}],
+    }
+
+    result = await nodes.run_tests(RecordingRuntime(), state)
+
+    by_project = {r["project_id"]: r for r in result["test_results"]}
+    assert by_project["python"]["status"] == "skipped"
+    assert by_project["python"]["blocking"] is False
+    assert "not relevant" in by_project["python"]["output"].lower()
+    assert by_project["frontend"]["status"] == "passed"
+    task = result["plan"][0]
+    assert task["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_security_review_skips_projects_not_relevant_to_this_feature(monkeypatch) -> None:
+    async def fake_changed_paths(runtime, state, project_id):
+        return ["some/file"]
+
+    def fail_if_called(project, paths):
+        raise AssertionError(f"scan_project must not run for an irrelevant project: {paths}")
+
+    monkeypatch.setattr(nodes, "_changed_paths", fake_changed_paths)
+    monkeypatch.setattr(nodes, "scan_project", fail_if_called)
+
+    class StubRuntime:
+        def workdir_for(self, state, project_id):
+            return Path(".")
+
+        async def persist(self, state, node, event=None, payload=None):
+            return state
+
+        async def announce_agent_started(self, state, task):
+            pass
+
+        async def announce_agent_finished(self, state, task):
+            pass
+
+    state = {
+        "detected_projects": [{"project_id": "python", "exists": True}],
+        "relevant_projects": ["frontend"],
+        "plan": [{"task_id": "T012", "agent": "security", "status": "pending", "description": "review security"}],
+    }
+
+    result = await nodes.security_review(StubRuntime(), state)
+
+    assert result["security_findings"] == []
+    assert result["plan"][0]["status"] == "completed"
+
+
+@pytest.mark.asyncio
 async def test_run_tests_announces_agent_lifecycle_for_qa(monkeypatch) -> None:
     """run_tests never published agent.started/agent.finished for the qa task — its card
     could never show it was running, and a failure's Último resultado was always empty."""

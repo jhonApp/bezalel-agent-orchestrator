@@ -541,8 +541,18 @@ async def run_tests(runtime: ExecutionRuntime, state: dict[str, Any]) -> dict[st
     qa_task = next((t for t in state.get("plan", []) if t.get("agent") == "qa"), None)
     if qa_task:
         await runtime.announce_agent_started(state, qa_task)
+    # A project the classifier didn't mark relevant must never gate completion on its own
+    # independent, possibly pre-existing, broken test state — dispatch_agents/create_plan
+    # already scope real work to relevant_projects; this mirrors that for the test gate.
+    relevant = set(state.get("relevant_projects") or [p["project_id"] for p in state.get("detected_projects", [])])
     results: list[TestResult] = []
     for project in state.get("detected_projects", []):
+        if project["project_id"] not in relevant:
+            results.append(TestResult(
+                project_id=project["project_id"], status="skipped",
+                output="Project not relevant to this feature request.", blocking=False,
+            ))
+            continue
         if not project.get("exists"):
             results.append(TestResult(project_id=project["project_id"], status="not_configured", blocking=True, output="project missing"))
             continue
@@ -589,9 +599,10 @@ async def security_review(runtime: ExecutionRuntime, state: dict[str, Any]) -> d
     task = next((t for t in state.get("plan", []) if t.get("agent") == "security"), None)
     if task:
         await runtime.announce_agent_started(state, task)
+    relevant = set(state.get("relevant_projects") or [p["project_id"] for p in state.get("detected_projects", [])])
     findings: list[SecurityFinding] = []
     for project in state.get("detected_projects", []):
-        if project.get("exists"):
+        if project.get("exists") and project["project_id"] in relevant:
             paths = await _changed_paths(runtime, state, project["project_id"])
             if paths:
                 worktree_project = {**project, "path": str(runtime.workdir_for(state, project["project_id"]))}
