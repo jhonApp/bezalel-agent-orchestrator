@@ -1905,8 +1905,22 @@ class Component extends DCLogic {
       closeExecution: () => this.setState({ selectedExecutionId: null }),
       execDrawerOpen: !!this.state.selectedExecutionId,
       selectedExecution: selectedExecution,
-      resumeExecution: () => { this.pushLog("Retomada solicitada para " + selectedExecution.tag + "."); this.showToast("Retomando " + selectedExecution.tag + "..."); },
-      cancelExecution: () => { this.pushLog("Cancelamento solicitado para " + selectedExecution.tag + "."); this.showToast(selectedExecution.tag + " cancelada."); },
+      resumeExecution: () => {
+        const id = selectedExecution.id;
+        const tag = selectedExecution.tag;
+        fetch(this.apiUrl("/executions/" + id + "/resume"), { method: "POST", headers: this.authHeaders() })
+          .then((r) => { if (!r.ok) throw new Error("bad status " + r.status); return r.json(); })
+          .then(() => { this.pushLog("Retomada solicitada para " + tag + "."); this.showToast("Retomando " + tag + "..."); })
+          .catch(() => { this.pushLog("Falha ao retomar " + tag + "."); this.showToast("Falha ao retomar " + tag + ".", 6000, "error"); });
+      },
+      cancelExecution: () => {
+        const id = selectedExecution.id;
+        const tag = selectedExecution.tag;
+        fetch(this.apiUrl("/executions/" + id + "/cancel"), { method: "POST", headers: this.authHeaders() })
+          .then((r) => { if (!r.ok) throw new Error("bad status " + r.status); return r.json(); })
+          .then(() => { this.pushLog("Cancelamento solicitado para " + tag + "."); this.showToast(tag + " cancelada."); })
+          .catch(() => { this.pushLog("Falha ao cancelar " + tag + "."); this.showToast("Falha ao cancelar " + tag + ".", 6000, "error"); });
+      },
 
       mcps: mcps,
       mcpIncidentOpen: this.state.mcpIncidentOpen,
