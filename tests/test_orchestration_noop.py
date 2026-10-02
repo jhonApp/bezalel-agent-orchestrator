@@ -663,6 +663,129 @@ async def test_security_review_tags_each_finding_with_its_project_id(monkeypatch
     assert {f["project_id"] for f in findings} == {"frontend", "backend"}
 
 
+@pytest.mark.asyncio
+async def test_security_review_announces_agent_lifecycle_and_reports_blocking_findings(monkeypatch):
+    """security_review never published agent.started/agent.finished — its card's Último
+    resultado could never show why it blocked, only the raw findings list elsewhere."""
+    async def fake_changed_paths(runtime, state, project_id):
+        return ["appsettings.json"]
+
+    def fake_scan_project(project, paths):
+        return [SecurityFinding(severity="blocking", path=paths[0], message="hardcoded secret")]
+
+    monkeypatch.setattr(nodes, "_changed_paths", fake_changed_paths)
+    monkeypatch.setattr(nodes, "scan_project", fake_scan_project)
+
+    class RecordingRuntime:
+        def __init__(self):
+            self.announced_started = []
+            self.announced_finished = []
+
+        def workdir_for(self, state, project_id):
+            return Path(".")
+
+        async def persist(self, state, node, event=None, payload=None):
+            return state
+
+        async def announce_agent_started(self, state, task):
+            self.announced_started.append(task["agent"])
+
+        async def announce_agent_finished(self, state, task):
+            self.announced_finished.append((task["agent"], task["status"]))
+
+    runtime = RecordingRuntime()
+    state = {
+        "detected_projects": [{"project_id": "backend", "exists": True}],
+        "plan": [{"task_id": "T012", "agent": "security", "status": "pending", "description": "review security"}],
+    }
+
+    result = await nodes.security_review(runtime, state)
+
+    assert runtime.announced_started == ["security"]
+    assert runtime.announced_finished == [("security", "blocked")]
+    task = result["plan"][0]
+    assert "1 finding" in task["result"]["summary"]
+    assert task["result"]["errors"] == ["backend: hardcoded secret"]
+
+
+@pytest.mark.asyncio
+async def test_run_tests_announces_agent_lifecycle_for_qa(monkeypatch) -> None:
+    """run_tests never published agent.started/agent.finished for the qa task — its card
+    could never show it was running, and a failure's Último resultado was always empty."""
+    class RecordingRuntime:
+        def __init__(self):
+            self.announced_started = []
+            self.announced_finished = []
+
+        async def persist(self, state, node, event=None, payload=None):
+            return state
+
+        async def announce_agent_started(self, state, task):
+            self.announced_started.append(task["agent"])
+
+        async def announce_agent_finished(self, state, task):
+            self.announced_finished.append((task["agent"], task["status"]))
+
+    runtime = RecordingRuntime()
+    state = {
+        "detected_projects": [], "approvals": {},
+        "plan": [{"task_id": "T011", "agent": "qa", "status": "pending", "description": "run the relevant tests"}],
+    }
+
+    result = await nodes.run_tests(runtime, state)
+
+    assert runtime.announced_started == ["qa"]
+    assert runtime.announced_finished == [("qa", "completed")]
+    task = result["plan"][0]
+    assert task["result"]["errors"] == []
+
+
+@pytest.mark.asyncio
+async def test_run_tests_records_an_actionable_excerpt_per_failing_project(monkeypatch) -> None:
+    """A qa failure must tell an operator which project broke and what the test runner
+    actually printed, not just a bare pass/fail count — that count alone was the
+    "aguardando revisão" card with no way to tell what action to take."""
+    from schemas.models import CommandResult
+
+    async def fake_changed_paths(runtime, state, project_id):
+        return ["src/app.py"]
+
+    async def fake_run_command(command, cwd, timeout=900, env=None, direct_cmd_exec=False):
+        return CommandResult(command=command, cwd=str(cwd), returncode=1,
+                             stdout="", stderr="2 failed, 3 passed", duration_seconds=0.1)
+
+    monkeypatch.setattr(nodes, "_changed_paths", fake_changed_paths)
+    monkeypatch.setattr(nodes, "run_command", fake_run_command)
+
+    class RecordingRuntime:
+        settings = type("Settings", (), {"agent_timeout_seconds": 30})()
+
+        def workdir_for(self, state, project_id):
+            return Path(".")
+
+        async def persist(self, state, node, event=None, payload=None):
+            return state
+
+        async def announce_agent_started(self, state, task):
+            pass
+
+        async def announce_agent_finished(self, state, task):
+            pass
+
+    state = {
+        "detected_projects": [{"project_id": "backend", "exists": True, "commands": {"test": "dotnet test"}}],
+        "approvals": {},
+        "plan": [{"task_id": "T011", "agent": "qa", "status": "pending", "description": "run the relevant tests"}],
+    }
+
+    result = await nodes.run_tests(RecordingRuntime(), state)
+
+    task = result["plan"][0]
+    assert task["status"] == "failed"
+    assert "backend" in task["result"]["summary"]
+    assert task["result"]["errors"] == ["backend: 2 failed, 3 passed"]
+
+
 def test_execution_state_model_defaults_quality_scores_to_an_empty_list():
     from schemas.models import ExecutionStateModel
 

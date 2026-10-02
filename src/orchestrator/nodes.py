@@ -538,6 +538,9 @@ async def run_contract_validation(runtime: ExecutionRuntime, state: dict[str, An
 
 
 async def run_tests(runtime: ExecutionRuntime, state: dict[str, Any]) -> dict[str, Any]:
+    qa_task = next((t for t in state.get("plan", []) if t.get("agent") == "qa"), None)
+    if qa_task:
+        await runtime.announce_agent_started(state, qa_task)
     results: list[TestResult] = []
     for project in state.get("detected_projects", []):
         if not project.get("exists"):
@@ -565,19 +568,27 @@ async def run_tests(runtime: ExecutionRuntime, state: dict[str, Any]) -> dict[st
                                   output=(result.stdout + "\n" + result.stderr + ("\n" + result.error if result.error else ""))[-12000:],
                                   duration_seconds=result.duration_seconds, blocking=not result.ok))
     state["test_results"] = [r.model_dump(mode="json") for r in results]
-    qa_task = next((t for t in state.get("plan", []) if t.get("agent") == "qa"), None)
     if qa_task:
         failed = [r for r in results if r.blocking or r.status == "failed"]
         qa_task["status"] = "failed" if failed else "completed"
         qa_task["result"] = {
             "status": qa_task["status"],
-            "summary": f"{len(results) - len(failed)} project test gates passed or skipped; {len(failed)} failed",
+            "summary": f"{len(results) - len(failed)} project test gates passed or skipped; {len(failed)} failed"
+                      + (" (" + ", ".join(r.project_id for r in failed) + ")" if failed else ""),
+            # A short excerpt per failing project — enough to tell a human where to look
+            # (which project, what the test runner actually printed) without making them
+            # dig through the checkpoint store's raw test_results for the full output.
+            "errors": [f"{r.project_id}: {(r.output or '').strip()[-800:]}" for r in failed],
         }
+        await runtime.announce_agent_finished(state, qa_task)
     state["next_action"] = "security_review"
     return await runtime.persist(state, "run_tests", "tests.completed", {"passed": sum(r.status == "passed" for r in results), "failed": sum(r.status == "failed" for r in results)})
 
 
 async def security_review(runtime: ExecutionRuntime, state: dict[str, Any]) -> dict[str, Any]:
+    task = next((t for t in state.get("plan", []) if t.get("agent") == "security"), None)
+    if task:
+        await runtime.announce_agent_started(state, task)
     findings: list[SecurityFinding] = []
     for project in state.get("detected_projects", []):
         if project.get("exists"):
@@ -591,10 +602,16 @@ async def security_review(runtime: ExecutionRuntime, state: dict[str, Any]) -> d
     blocking = any(f.severity == "blocking" for f in findings)
     state["security_findings"] = [f.model_dump(mode="json") for f in findings]
     state["security_blocking"] = blocking
-    task = next((t for t in state.get("plan", []) if t.get("agent") == "security"), None)
     if task:
+        blocking_findings = [f for f in findings if f.severity == "blocking"]
         task["status"] = "blocked" if blocking else "completed"
-        task["result"] = {"status": task["status"], "findings": state["security_findings"]}
+        task["result"] = {
+            "status": task["status"],
+            "summary": f"{len(findings)} finding(s)" + (f", {len(blocking_findings)} blocking" if findings else ""),
+            "findings": state["security_findings"],
+            "errors": [f"{f.project_id}: {f.message}" for f in blocking_findings],
+        }
+        await runtime.announce_agent_finished(state, task)
     state["next_action"] = "code_review"
     return await runtime.persist(state, "security_review", "security.completed", {"findings": len(findings), "blocking": blocking})
 
